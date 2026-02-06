@@ -175,25 +175,25 @@ enum CourseStatus {
 }
 
 model Course {
-  id               String       @id @default(cuid()) @db.VarChar(25)
-  title            String // Required
-  description      String? // Optional
-  tags             Json? // Optional array, e.g., ["beginner"]
-  visibility       Visibility? // Optional (null = Internal)
-  version          String? // Optional (null = "1.0")
-  status           CourseStatus @default(DRAFT)
-  durationEstimate Int?
-  scormPackageId   String?      @db.VarChar(25)
-  createdBy        String       @db.VarChar(25)
-  createdAt        DateTime     @default(now())
-  updatedAt        DateTime     @updatedAt
-
-  modules      Module[]      @relation("CourseModules") // Named for nested
-  scormPackage ScormPackage? @relation(fields: [scormPackageId], references: [id])
-  creator      User          @relation("CreatedBy", fields: [createdBy], references: [id])
-  assignments  Assignment[]  @relation("CourseAssignments") // FIXED: Named for matching
-  attempts     Attempt[]
-  certificates Certificate[]
+  id                 String        @id @default(cuid()) @db.VarChar(25)
+  title              String // Required
+  description        String? // Optional
+  tags               Json? // Optional array, e.g., ["beginner"]
+  visibility         Visibility? // Optional (null = Internal)
+  version            String? // Optional (null = "1.0")
+  status             CourseStatus  @default(DRAFT)
+  durationEstimate   Int?
+  scormPackageId     String?       @db.VarChar(25)
+  createdBy          String        @db.VarChar(25)
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
+  scormCloudCourseId String?       @unique
+  modules            Module[]      @relation("CourseModules") // Named for nested
+  scormPackage       ScormPackage? @relation(fields: [scormPackageId], references: [id])
+  creator            User          @relation("CreatedBy", fields: [createdBy], references: [id])
+  assignments        Assignment[]  @relation("CourseAssignments") // FIXED: Named for matching
+  attempts           Attempt[]
+  certificates       Certificate[]
 
   @@map("courses")
 }
@@ -213,16 +213,16 @@ model Module {
 }
 
 model Lesson {
-  id             String   @id @default(cuid()) @db.VarChar(25)
-  title          String // Required
-  description    String? // Optional
-  scormPackageId String?  @db.VarChar(25) // Optional SCORM
-  moduleId       String   @db.VarChar(25)
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
-
-  module       Module        @relation("ModuleLessons", fields: [moduleId], references: [id], onDelete: Cascade) // FIXED: Matching name
-  scormPackage ScormPackage? @relation(fields: [scormPackageId], references: [id])
+  id                 String        @id @default(cuid()) @db.VarChar(25)
+  title              String // Required
+  description        String? // Optional
+  scormPackageId     String?       @db.VarChar(25) // Optional SCORM
+  moduleId           String        @db.VarChar(25)
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
+  module             Module        @relation("ModuleLessons", fields: [moduleId], references: [id], onDelete: Cascade) // FIXED: Matching name
+  scormPackage       ScormPackage? @relation(fields: [scormPackageId], references: [id])
+  scormCloudCourseId String?       @unique
 
   @@index([moduleId]) // Perf
   @@map("lessons")
@@ -236,14 +236,15 @@ model ScormPackage {
   scormVersion ScormVersion
   encrypted    Boolean      @default(false)
   checksum     String
+  scormCloudId String?      @unique
   launchFile   String?
   uploadedBy   String       @db.VarChar(25)
   uploadedAt   DateTime     @default(now())
   blobs        String[]
-  courses      Course[]
-  lessons      Lesson[]
   fileCount    Int
   packageSize  Int
+  courses      Course[]
+  lessons      Lesson[]
   attempts     Attempt[]
   uploader     User?        @relation(fields: [uploadedBy], references: [id])
 
@@ -276,24 +277,28 @@ model Assignment {
 }
 
 model Attempt {
-  id                   String        @id @default(cuid()) @db.VarChar(25)
-  userId               String        @db.VarChar(25)
-  courseId             String        @db.VarChar(25)
-  status               AttemptStatus @default(NOT_STARTED)
-  completionPercentage Float?        @default(0)
-  dueDate              DateTime?
-  createdAt            DateTime      @default(now())
-  updatedAt            DateTime      @updatedAt
-  assignmentId         String?       @db.VarChar(25) // FIXED: Optional FK to Assignment
-  assignment           Assignment?   @relation("AssignmentAttempts", fields: [assignmentId], references: [id], onDelete: SetNull)
-  user                 User          @relation("UserAttempts", fields: [userId], references: [id], onDelete: Cascade) // FIXED: Matching name
-  course               Course        @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  learningHours        Float?
-  score                Float?
-  scormPackage         ScormPackage? @relation(fields: [scormPackageId], references: [id])
-  scormPackageId       String?       @db.VarChar(25)
-  interactions         Interaction[]
-  suspendDatum         SuspendDatum?
+  id                       String        @id @default(cuid()) @db.VarChar(25)
+  userId                   String        @db.VarChar(25)
+  courseId                 String        @db.VarChar(25)
+  status                   AttemptStatus @default(NOT_STARTED)
+  completionPercentage     Float?        @default(0)
+  dueDate                  DateTime?
+  createdAt                DateTime      @default(now())
+  updatedAt                DateTime      @updatedAt
+  assignmentId             String?       @db.VarChar(25) // FIXED: Optional FK to Assignment
+  assignment               Assignment?   @relation("AssignmentAttempts", fields: [assignmentId], references: [id], onDelete: SetNull)
+  user                     User          @relation("UserAttempts", fields: [userId], references: [id], onDelete: Cascade) // FIXED: Matching name
+  course                   Course        @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  learningHours            Float?
+  score                    Float?
+  scormPackage             ScormPackage? @relation(fields: [scormPackageId], references: [id])
+  scormPackageId           String?       @db.VarChar(25)
+  interactions             Interaction[]
+  suspendDatum             SuspendDatum?
+  scormCloudRegistrationId String?       @unique // your registrationId sent to Cloud (e.g. "attempt-${attempt.id}")
+  scormCloudLastSyncAt     DateTime?
+  scormCloudCompletion     Float?
+  scormCloudScoreScaled    Float?
 
   @@unique([userId, courseId])
   @@index([userId])
