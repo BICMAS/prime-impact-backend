@@ -150,15 +150,15 @@ export class ScormCloudService {
     static async createLaunchLink(courseId, learnerId, learnerName) {
         const client = this.init();
 
-        // Generate your own unique registrationId
         const registrationId = `reg-${uuidv4().replace(/-/g, '')}`;
         console.log(`[LAUNCH] Generated registrationId: ${registrationId}`);
 
-        const [firstName = 'Learner', ...lastParts] = (learnerName || 'User').split(' ');
-        const lastName = lastParts.join(' ') || 'User';
+        const nameParts = (learnerName || 'Learner User').split(' ');
+        const firstName = nameParts[0] || 'Learner';
+        const lastName = nameParts.slice(1).join(' ') || 'User';
 
         const payload = {
-            registrationId,  // We provide it
+            registrationId,
             courseId,
             learner: {
                 id: learnerId.toString(),
@@ -173,57 +173,67 @@ export class ScormCloudService {
             const regRes = await client.post('/registrations', payload);
             console.log('[LAUNCH] Registration create response:', regRes.status, JSON.stringify(regRes.data, null, 2));
 
-            // Trust the ID we sent (V2 usually honors it)
-            // But confirm it exists with GET
-            await new Promise(r => setTimeout(r, 2000)); // small delay for propagation
-            const confirmRes = await client.get(`/registrations/${registrationId}`);
-            console.log('[LAUNCH] Registration confirmed exists:', JSON.stringify(confirmRes.data, null, 2));
+            // Confirm existence
+            await new Promise(r => setTimeout(r, 2000));
+            const confirm = await client.get(`/registrations/${registrationId}`);
+            console.log('[LAUNCH] Registration confirmed:', JSON.stringify(confirm.data, null, 2));
         } catch (createErr) {
-            console.error('[LAUNCH CREATE ERROR FULL]', {
+            console.error('[LAUNCH CREATE ERROR]', {
                 status: createErr.response?.status,
                 data: createErr.response?.data,
-                message: createErr.message,
-                payloadSent: payload
+                message: createErr.message
             });
             throw new Error(`Registration creation failed: ${createErr.response?.data?.error || createErr.message}`);
         }
 
-        // Launch with the ID we know
-        try {
-            const launchRes = await client.post(`/registrations/${registrationId}/launch`);
-            const launchUrl = launchRes.data.launchLink;
+        // Launch with retry
+        let launchUrl;
+        let success = false;
 
-            if (!launchUrl) {
-                throw new Error('No launchLink in response');
+        for (let attempt = 1; attempt <= 4; attempt++) {
+            if (attempt > 1) {
+                console.log(`[LAUNCH] Attempt ${attempt}/4 - waiting 8s for propagation...`);
+                await new Promise(r => setTimeout(r, 8000));
             }
 
-            console.log('[LAUNCH SUCCESS] Launch URL:', launchUrl);
+            try {
+                const launchRes = await client.post(`/registrations/${registrationId}/launch`);
+                launchUrl = launchRes.data.launchLink;
 
-            return {
-                launchUrl,
-                registrationId
-            };
-        } catch (launchErr) {
-            console.error('[LAUNCH ERROR FULL]', {
-                status: launchErr.response?.status,
-                data: launchErr.response?.data,
-                message: launchErr.message,
-                registrationIdUsed: registrationId
-            });
-            throw launchErr;
+                if (launchUrl) {
+                    success = true;
+                    console.log('[LAUNCH] Success on attempt', attempt, '- URL:', launchUrl);
+                    break;
+                }
+            } catch (launchErr) {
+                console.error(`[LAUNCH ATTEMPT ${attempt} ERROR]`, {
+                    status: launchErr.response?.status,
+                    data: launchErr.response?.data,
+                    message: launchErr.message,
+                    regIdUsed: registrationId
+                });
+
+                if (launchErr.response?.status !== 404 || attempt === 4) {
+                    throw launchErr;
+                }
+            }
         }
+
+        if (!success) {
+            throw new Error(
+                `Launch failed after retries for registration ${registrationId}. ` +
+                `Registration exists, but launch returns 404. ` +
+                `Dispatch the course in dashboard or check App permissions.`
+            );
+        }
+
+        return { launchUrl, registrationId };
     }
 
     static async getRegistrationProgress(registrationId) {
         const client = this.init();
         const res = await client.get(`/registrations/${registrationId}/progress`);
         return res.data;
-    }
-
-    static async getRegistrationStatements(registrationId) {
-        const client = this.init();
-        const res = await client.get(`/registrations/${registrationId}/statements`);
-        return res.data.statements || [];
     }
 
     static async testConnection() {
