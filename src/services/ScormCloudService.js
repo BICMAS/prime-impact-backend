@@ -94,26 +94,22 @@ export class ScormCloudService {
  * (more reliable since jobs disappear quickly after completion)
  */
     static async waitForImportJob(jobId, courseId, filename, maxAttempts = 120, intervalMs = 8000) {
-        console.log(`[POLL START] For course ${courseId} (job ${jobId}) - checking every ${intervalMs / 1000}s, max ${maxAttempts} attempts`);
+        console.log(`[POLL START] For course ${courseId} (job ${jobId})`);
 
         const client = this.init();
 
-        // Initial delay
-        console.log('[POLL] Waiting initial 10s for processing...');
+        console.log('[POLL] Waiting initial 10s...');
         await new Promise(r => setTimeout(r, 10000));
 
         for (let attempt = 1; attempt <= maxAttempts; attempt++) {
             await new Promise(r => setTimeout(r, intervalMs));
 
             try {
-                // Primary check: does the COURSE exist now?
                 const courseRes = await client.get(`/courses/${courseId}`);
                 const course = courseRes.data;
 
-                console.log(`[POLL ${attempt}/${maxAttempts}] Course found! Status: ${course.status || 'unknown'}`);
-                console.log(`[POLL DETAIL] Course data: ${JSON.stringify(course, null, 2)}`);
+                console.log(`[POLL ${attempt}] Course found! Title: ${course.title}`);
 
-                // If course exists → import succeeded (even if job is gone)
                 return {
                     scormCloudId: course.id || courseId,
                     title: course.title || filename.replace(/\.zip$/i, ''),
@@ -121,32 +117,19 @@ export class ScormCloudService {
                 };
             } catch (err) {
                 if (err.response?.status === 404) {
-                    console.log(`[POLL ${attempt}] Course not visible yet (404) - still processing...`);
-                    // Optional: also try job endpoint for error info
-                    try {
-                        const jobRes = await client.get(`/courses/importJobs/${jobId}`);
-                        console.log(`[POLL JOB CHECK] Job state: ${jobRes.data.state || 'unknown'}`);
-                    } catch (jobErr) {
-                        // Ignore job 404
-                    }
+                    console.log(`[POLL ${attempt}] Course not visible yet`);
                     continue;
                 }
-
-                console.error(`[POLL ERROR ${attempt}]`, err.response?.data || err.message);
                 throw err;
             }
         }
 
-        throw new Error(
-            `Timeout waiting for course ${courseId} to appear. ` +
-            `But since you see it in dashboard, the import succeeded — just polling missed it. ` +
-            `You can safely use scormCloudId = ${courseId} now.`
-        );
+        throw new Error(`Timeout waiting for course ${courseId}. Check dashboard.`);
     }
-    // ──────────────────────────────────────────────
-    // The rest of your methods (unchanged)
-    // ──────────────────────────────────────────────
 
+    /**
+     * Create registration and get launch link (correct /launchLink endpoint)
+     */
     static async createLaunchLink(courseId, learnerId, learnerName) {
         const client = this.init();
 
@@ -157,7 +140,7 @@ export class ScormCloudService {
         const firstName = nameParts[0] || 'Learner';
         const lastName = nameParts.slice(1).join(' ') || 'User';
 
-        const payload = {
+        const regPayload = {
             registrationId,
             courseId,
             learner: {
@@ -167,67 +150,54 @@ export class ScormCloudService {
             }
         };
 
-        console.log('[LAUNCH] Creating registration with payload:', JSON.stringify(payload, null, 2));
+        console.log('[LAUNCH] Creating registration:', JSON.stringify(regPayload, null, 2));
 
         try {
-            const regRes = await client.post('/registrations', payload);
-            console.log('[LAUNCH] Registration create response:', regRes.status, JSON.stringify(regRes.data, null, 2));
+            await client.post('/registrations', regPayload);
+            console.log('[LAUNCH] Registration created');
 
-            // Confirm existence
+            // Confirm
             await new Promise(r => setTimeout(r, 2000));
             const confirm = await client.get(`/registrations/${registrationId}`);
-            console.log('[LAUNCH] Registration confirmed:', JSON.stringify(confirm.data, null, 2));
-        } catch (createErr) {
-            console.error('[LAUNCH CREATE ERROR]', {
-                status: createErr.response?.status,
-                data: createErr.response?.data,
-                message: createErr.message
-            });
-            throw new Error(`Registration creation failed: ${createErr.response?.data?.error || createErr.message}`);
+            console.log('[LAUNCH] Registration confirmed');
+        } catch (err) {
+            console.error('[REGISTRATION ERROR]', err.response?.data || err.message);
+            throw err;
         }
 
-        // Launch with retry
-        let launchUrl;
-        let success = false;
+        // Launch with correct endpoint + required payload
+        const launchPayload = {
+            redirectOnExitUrl: 'https://your-lms-domain.com/lesson-complete' // ← CHANGE THIS
+            // or use: 'message' or 'close'
+        };
 
-        for (let attempt = 1; attempt <= 4; attempt++) {
-            if (attempt > 1) {
-                console.log(`[LAUNCH] Attempt ${attempt}/4 - waiting 8s for propagation...`);
-                await new Promise(r => setTimeout(r, 8000));
-            }
+        console.log('[LAUNCH] Requesting launch link:', JSON.stringify(launchPayload, null, 2));
 
-            try {
-                const launchRes = await client.post(`/registrations/${registrationId}/launch`);
-                launchUrl = launchRes.data.launchLink;
-
-                if (launchUrl) {
-                    success = true;
-                    console.log('[LAUNCH] Success on attempt', attempt, '- URL:', launchUrl);
-                    break;
-                }
-            } catch (launchErr) {
-                console.error(`[LAUNCH ATTEMPT ${attempt} ERROR]`, {
-                    status: launchErr.response?.status,
-                    data: launchErr.response?.data,
-                    message: launchErr.message,
-                    regIdUsed: registrationId
-                });
-
-                if (launchErr.response?.status !== 404 || attempt === 4) {
-                    throw launchErr;
-                }
-            }
-        }
-
-        if (!success) {
-            throw new Error(
-                `Launch failed after retries for registration ${registrationId}. ` +
-                `Registration exists, but launch returns 404. ` +
-                `Dispatch the course in dashboard or check App permissions.`
+        try {
+            const launchRes = await client.post(
+                `/registrations/${registrationId}/launchLink`,
+                launchPayload
             );
-        }
 
-        return { launchUrl, registrationId };
+            const launchUrl = launchRes.data.launchLink;
+
+            if (!launchUrl) {
+                throw new Error('No launchLink in response');
+            }
+
+            console.log('[LAUNCH] Success:', launchUrl);
+
+            return { launchUrl, registrationId };
+        } catch (err) {
+            console.error('[LAUNCH ERROR]', {
+                status: err.response?.status,
+                data: err.response?.data,
+                message: err.message,
+                regId: registrationId,
+                payload: launchPayload
+            });
+            throw err;
+        }
     }
 
     static async getRegistrationProgress(registrationId) {
@@ -240,9 +210,9 @@ export class ScormCloudService {
         const client = this.init();
         try {
             const res = await client.get('/courses?limit=1');
-            return { success: true, message: `Connected - ${res.data.courses?.length || 0} courses found` };
+            return { success: true };
         } catch (err) {
-            return { success: false, message: err.message };
+            return { success: false, error: err.message };
         }
     }
 }
