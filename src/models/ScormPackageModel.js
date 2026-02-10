@@ -524,30 +524,80 @@ export class ScormPackageModel {
     static async getLaunchUrl(id, userId, userFullName) {
         console.log('[MODEL] Getting launch URL for package ID:', id);
 
-        // Use the class name to call static method
         const pkg = await ScormPackageModel.findById(id);
-
-        if (!pkg) {
-            throw new Error('Package not found');
-        }
+        if (!pkg) throw new Error('Package not found');
 
         const scormCloudId = pkg.scormCloudId;
-        if (!scormCloudId) {
-            throw new Error('This package is not uploaded to SCORM Cloud');
+        if (!scormCloudId) throw new Error('No SCORM Cloud ID');
+
+        let registrationId = null;
+
+        // Reuse check
+        const existing = await prisma.attempt.findFirst({
+            where: {
+                userId,
+                scormPackageId: id,
+                scormCloudRegistrationId: { not: null }
+            },
+            select: { scormCloudRegistrationId: true }
+        });
+
+        if (existing?.scormCloudRegistrationId) {
+            registrationId = existing.scormCloudRegistrationId;
+            console.log(`[LAUNCH REUSE] Using: ${registrationId}`);
         }
 
-        console.log('[MODEL] Found package with scormCloudId:', scormCloudId);
+        let launchUrl;
 
-        const { launchUrl, registrationId } = await ScormCloudService.createLaunchLink(
-            scormCloudId,
-            userId,
-            userFullName || 'Learner'
-        );
+        if (!registrationId) {
+            const result = await ScormCloudService.createLaunchLink(
+                scormCloudId,
+                userId,
+                userFullName || 'Learner'
+            );
 
-        console.log('[MODEL] Launch URL generated:', launchUrl);
+            launchUrl = result.launchUrl;
+            registrationId = result.registrationId;
 
-        // Optional: store registrationId somewhere if you have an Attempt
-        // e.g. await prisma.attempt.updateMany({ ... })
+            await prisma.attempt.upsert({
+                where: {
+                    userId_scormPackageId: {
+                        userId,
+                        scormPackageId: id
+                    }
+                },
+                update: {
+                    scormCloudRegistrationId: registrationId,
+                    updatedAt: new Date()
+                },
+                create: {
+                    user: {
+                        connect: { id: userId }
+                    },
+                    scormPackage: {
+                        connect: { id: id }  // ← Fixed: use relation connect
+                    },
+                    status: 'IN_PROGRESS',
+                    scormCloudRegistrationId: registrationId,
+                    createdAt: new Date(),
+                    updatedAt: new Date()
+                }
+            });
+
+            console.log(`[LAUNCH] Created and saved: ${registrationId}`);
+        } else {
+            const launchPayload = {
+                redirectOnExitUrl: 'https://your-domain.com/lesson-complete' // CHANGE THIS
+            };
+
+            const launchRes = await ScormCloudService.client.post(
+                `/registrations/${registrationId}/launchLink`,
+                launchPayload
+            );
+
+            launchUrl = launchRes.data.launchLink;
+            if (!launchUrl) throw new Error('No launchLink');
+        }
 
         return launchUrl;
     }

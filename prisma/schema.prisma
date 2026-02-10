@@ -279,30 +279,31 @@ model Assignment {
 model Attempt {
   id                       String        @id @default(cuid()) @db.VarChar(25)
   userId                   String        @db.VarChar(25)
-  courseId                 String        @db.VarChar(25)
+  courseId                 String?       @db.VarChar(25) // ← make optional
   status                   AttemptStatus @default(NOT_STARTED)
   completionPercentage     Float?        @default(0)
   dueDate                  DateTime?
   createdAt                DateTime      @default(now())
   updatedAt                DateTime      @updatedAt
-  assignmentId             String?       @db.VarChar(25) // FIXED: Optional FK to Assignment
+  assignmentId             String?       @db.VarChar(25)
   assignment               Assignment?   @relation("AssignmentAttempts", fields: [assignmentId], references: [id], onDelete: SetNull)
-  user                     User          @relation("UserAttempts", fields: [userId], references: [id], onDelete: Cascade) // FIXED: Matching name
-  course                   Course        @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  user                     User          @relation("UserAttempts", fields: [userId], references: [id], onDelete: Cascade)
+  course                   Course?       @relation(fields: [courseId], references: [id], onDelete: SetNull) // ← nullable relation
   learningHours            Float?
   score                    Float?
   scormPackage             ScormPackage? @relation(fields: [scormPackageId], references: [id])
   scormPackageId           String?       @db.VarChar(25)
   interactions             Interaction[]
   suspendDatum             SuspendDatum?
-  scormCloudRegistrationId String?       @unique // your registrationId sent to Cloud (e.g. "attempt-${attempt.id}")
+  scormCloudRegistrationId String?       @unique
   scormCloudLastSyncAt     DateTime?
   scormCloudCompletion     Float?
   scormCloudScoreScaled    Float?
 
-  @@unique([userId, courseId])
+  @@unique([userId, scormPackageId]) // ← CHANGE THIS: unique per user + package
   @@index([userId])
   @@index([courseId])
+  @@index([scormPackageId])
   @@map("attempts")
 }
 
