@@ -107,6 +107,7 @@ model User {
   scormPackages               ScormPackage[]
   certificateTemplatesCreated CertificateTemplate[]   @relation("CertificateTemplatesCreated")
   points                      Int                     @default(0)
+  scormAttempts               ScormAttempt[]
 
   @@map("users")
 }
@@ -229,24 +230,25 @@ model Lesson {
 }
 
 model ScormPackage {
-  id           String       @id @default(cuid()) @db.VarChar(25)
-  filename     String
-  storagePath  String
-  manifestJson Json
-  scormVersion ScormVersion
-  encrypted    Boolean      @default(false)
-  checksum     String
-  scormCloudId String?      @unique
-  launchFile   String?
-  uploadedBy   String       @db.VarChar(25)
-  uploadedAt   DateTime     @default(now())
-  blobs        String[]
-  fileCount    Int
-  packageSize  Int
-  courses      Course[]
-  lessons      Lesson[]
-  attempts     Attempt[]
-  uploader     User?        @relation(fields: [uploadedBy], references: [id])
+  id            String         @id @default(cuid()) @db.VarChar(25)
+  filename      String
+  storagePath   String
+  manifestJson  Json
+  scormVersion  ScormVersion
+  encrypted     Boolean        @default(false)
+  checksum      String
+  scormCloudId  String?        @unique
+  launchFile    String?
+  uploadedBy    String         @db.VarChar(25)
+  uploadedAt    DateTime       @default(now())
+  blobs         String[]
+  fileCount     Int
+  packageSize   Int
+  courses       Course[]
+  lessons       Lesson[]
+  attempts      Attempt[]
+  uploader      User?          @relation(fields: [uploadedBy], references: [id])
+  scormAttempts ScormAttempt[]
 
   @@map("scorm_packages")
 }
@@ -277,34 +279,64 @@ model Assignment {
 }
 
 model Attempt {
-  id                       String        @id @default(cuid()) @db.VarChar(25)
-  userId                   String        @db.VarChar(25)
-  courseId                 String?       @db.VarChar(25) // ← make optional
-  status                   AttemptStatus @default(NOT_STARTED)
-  completionPercentage     Float?        @default(0)
+  id                       String         @id @default(cuid()) @db.VarChar(25)
+  userId                   String         @db.VarChar(25)
+  courseId                 String?        @db.VarChar(25)
+  status                   AttemptStatus  @default(NOT_STARTED)
+  completionPercentage     Float?         @default(0)
   dueDate                  DateTime?
-  createdAt                DateTime      @default(now())
-  updatedAt                DateTime      @updatedAt
-  assignmentId             String?       @db.VarChar(25)
-  assignment               Assignment?   @relation("AssignmentAttempts", fields: [assignmentId], references: [id], onDelete: SetNull)
-  user                     User          @relation("UserAttempts", fields: [userId], references: [id], onDelete: Cascade)
-  course                   Course?       @relation(fields: [courseId], references: [id], onDelete: SetNull) // ← nullable relation
+  createdAt                DateTime       @default(now())
+  updatedAt                DateTime       @updatedAt
+  assignmentId             String?        @db.VarChar(25)
+  assignment               Assignment?    @relation("AssignmentAttempts", fields: [assignmentId], references: [id], onDelete: SetNull)
+  user                     User           @relation("UserAttempts", fields: [userId], references: [id], onDelete: Cascade)
+  course                   Course?        @relation(fields: [courseId], references: [id], onDelete: SetNull) // ← nullable relation
   learningHours            Float?
   score                    Float?
-  scormPackage             ScormPackage? @relation(fields: [scormPackageId], references: [id])
-  scormPackageId           String?       @db.VarChar(25)
+  scormPackage             ScormPackage?  @relation(fields: [scormPackageId], references: [id])
+  scormPackageId           String?        @db.VarChar(25)
   interactions             Interaction[]
   suspendDatum             SuspendDatum?
-  scormCloudRegistrationId String?       @unique
+  scormCloudRegistrationId String?        @unique
   scormCloudLastSyncAt     DateTime?
   scormCloudCompletion     Float?
   scormCloudScoreScaled    Float?
+  scormCloudDuration       String?
+  scormAttempts            ScormAttempt[]
 
-  @@unique([userId, scormPackageId]) // ← CHANGE THIS: unique per user + package
+  @@unique([userId, courseId])
+  @@unique([userId, scormPackageId])
   @@index([userId])
   @@index([courseId])
   @@index([scormPackageId])
   @@map("attempts")
+}
+
+model ScormAttempt {
+  id                       String        @id @default(cuid()) @db.VarChar(25)
+  userId                   String        @db.VarChar(25)
+  scormPackageId           String        @db.VarChar(25)
+  attemptId                String?       @db.VarChar(25) // optional link to course-level Attempt
+  scormCloudRegistrationId String        @unique
+  status                   AttemptStatus @default(IN_PROGRESS)
+  completionPercentage     Float?        @default(0)
+  score                    Float?
+  learningHours            Float?
+  scormCloudLastSyncAt     DateTime?
+  scormCloudCompletion     Float?
+  scormCloudScoreScaled    Float?
+  createdAt                DateTime      @default(now())
+  updatedAt                DateTime      @updatedAt
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  scormPackage ScormPackage @relation(fields: [scormPackageId], references: [id], onDelete: Cascade)
+  attempt      Attempt?     @relation(fields: [attemptId], references: [id], onDelete: SetNull)
+
+  @@unique([userId, scormPackageId])
+  @@index([userId])
+  @@index([scormPackageId])
+  @@index([attemptId])
+  @@map("scorm_attempts")
 }
 
 // Interactions: SCORM interactions (consider separate table per type if volume high; here as flat for simplicity)

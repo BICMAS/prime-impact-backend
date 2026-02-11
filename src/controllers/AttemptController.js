@@ -10,3 +10,20 @@ export const updateProgress = async (req, res) => {
         res.status(400).json({ error: error.message });
     }
 };
+
+export const syncScormProgress = async (req, res) => {
+    try {
+        const { scormAttemptId } = req.params;
+        const updated = await AttemptService.syncScormProgress(scormAttemptId);
+        res.json({
+            success: true,
+            data: updated
+        });
+    } catch (error) {
+        console.error('[SCORM SYNC ERROR]', error);
+        res.status(400).json({
+            success: false,
+            error: error.message
+        });
+    }
+};
