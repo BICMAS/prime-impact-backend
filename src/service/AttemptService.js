@@ -30,16 +30,23 @@ export class AttemptService {
         if (!scormAttempt) throw new Error('ScormAttempt not found');
         if (!scormAttempt.scormCloudRegistrationId) throw new Error('No SCORM Cloud registration');
 
-        const progress = await ScormCloudService.getRegistrationProgress(scormAttempt.scormCloudRegistrationId);
+        const registrationId = scormAttempt.scormCloudRegistrationId;
 
+        // FIXED: Use correct endpoint
+        const client = ScormCloudService.init();
+        const res = await client.get(`/registrations/${registrationId}`);
+
+        const registration = res.data;
+
+        // Map fields (adjust based on actual response structure)
         const updateData = {
-            status: progress.completion === 1 ? 'COMPLETED' : 'IN_PROGRESS',
-            completionPercentage: Math.round((progress.completionAmount?.scaled || 0) * 100),
-            score: progress.score?.raw || null,
-            learningHours: progress.duration ? this.parseDurationToHours(progress.duration) : null,
+            status: registration.registrationCompletion === 'COMPLETED' ? 'COMPLETED' : 'IN_PROGRESS',
+            completionPercentage: Math.round((registration.registrationCompletionAmount || 0) * 100),
+            score: registration.score?.raw || null,
+            learningHours: registration.totalSecondsTracked ? registration.totalSecondsTracked / 3600 : null,
             scormCloudLastSyncAt: new Date(),
-            scormCloudCompletion: progress.completionAmount?.scaled || 0,
-            scormCloudScoreScaled: progress.score?.scaled || null,
+            scormCloudCompletion: registration.registrationCompletionAmount || 0,
+            scormCloudScoreScaled: registration.score?.scaled || null,
             updatedAt: new Date()
         };
 
@@ -49,46 +56,11 @@ export class AttemptService {
             include: { scormPackage: true, attempt: true }
         });
 
-        // Roll up to course-level Attempt if linked
+        // Roll up to course Attempt if linked
         if (updated.attemptId) {
             await this.rollUpCourseCompletion(updated.attemptId);
         }
 
         return updated;
-    }
-
-    static parseDurationToHours(duration) {
-        if (!duration) return null;
-        const match = duration.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+\.?\d*)S)?/);
-        if (!match) return null;
-        const h = parseFloat(match[1] || 0);
-        const m = parseFloat(match[2] || 0);
-        const s = parseFloat(match[3] || 0);
-        return h + m / 60 + s / 3600;
-    }
-
-    // Roll up package progress to course-level Attempt
-    static async rollUpCourseCompletion(courseAttemptId) {
-        const courseAttempt = await prisma.attempt.findUnique({
-            where: { id: courseAttemptId },
-            include: { scormAttempts: true }
-        });
-
-        if (!courseAttempt) return;
-
-        const packageAttempts = courseAttempt.scormAttempts;
-
-        const avgCompletion = packageAttempts.length > 0
-            ? packageAttempts.reduce((sum, p) => sum + (p.completionPercentage || 0), 0) / packageAttempts.length
-            : 0;
-
-        await prisma.attempt.update({
-            where: { id: courseAttemptId },
-            data: {
-                completionPercentage: avgCompletion,
-                status: avgCompletion >= 100 ? 'COMPLETED' : 'IN_PROGRESS',
-                updatedAt: new Date()
-            }
-        });
     }
 }
