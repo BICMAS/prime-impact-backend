@@ -67,8 +67,8 @@ export class ScormPackageModel {
         const scormCloudId = pkg.scormCloudId;
         if (!scormCloudId) throw new Error('No SCORM Cloud ID');
 
-        // 1. Find any existing ScormAttempt for this user + package
-        const existing = await prisma.scormAttempt.findFirst({
+        // 1. Find existing ScormAttempt (any record for this user + package)
+        let scormAttempt = await prisma.scormAttempt.findFirst({
             where: {
                 userId,
                 scormPackageId: packageId
@@ -76,13 +76,13 @@ export class ScormPackageModel {
             select: { id: true, scormCloudRegistrationId: true }
         });
 
-        let registrationId = existing?.scormCloudRegistrationId;
+        let registrationId = scormAttempt?.scormCloudRegistrationId;
         let launchUrl;
 
         if (registrationId) {
             console.log(`[LAUNCH REUSE] Using existing registrationId: ${registrationId}`);
 
-            const client = ScormCloudService.init();  // ensure client is ready
+            const client = ScormCloudService.init();
 
             const launchPayload = {
                 redirectOnExitUrl: 'https://your-domain.com/lesson-complete' // CHANGE THIS
@@ -107,11 +107,17 @@ export class ScormPackageModel {
             registrationId = result.registrationId;
             launchUrl = result.launchUrl;
 
-            // Save new ScormAttempt
-            await prisma.scormAttempt.create({
+            // Create ScormAttempt and link to course Attempt if possible
+            const courseAttempt = await prisma.attempt.findFirst({
+                where: { userId, courseId: pkg.courseId || null },
+                select: { id: true }
+            });
+
+            scormAttempt = await prisma.scormAttempt.create({
                 data: {
                     userId,
                     scormPackageId: packageId,
+                    attemptId: courseAttempt?.id || null,
                     scormCloudRegistrationId: registrationId,
                     status: 'IN_PROGRESS',
                     createdAt: new Date(),
@@ -119,10 +125,14 @@ export class ScormPackageModel {
                 }
             });
 
-            console.log(`[LAUNCH] Created new registrationId: ${registrationId}`);
+            console.log(`[LAUNCH] Created ScormAttempt ${scormAttempt.id} with regId ${registrationId}`);
         }
 
-        return launchUrl;
+        // Always return both values to frontend
+        return {
+            launchUrl,
+            scormAttemptId: scormAttempt.id
+        };
     }
 }
 

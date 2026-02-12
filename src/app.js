@@ -69,5 +69,5 @@ app.use((err, req, res, next) => {
 const server = app.listen(port, () => {
     console.log(`Server running on http://localhost:${port}`);
 });
-server.keepAliveTimeout = 65000;  // FIXED: Keep-alive for long uploads
+server.keepAliveTimeout = 65000;
 server.timeout = 300000;

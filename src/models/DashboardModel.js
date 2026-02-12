@@ -293,20 +293,33 @@ export class DashboardModel {
     static async getCurrentCourse(userId) {
         console.log('[DASHBOARD MODEL] getCurrentCourse for userId:', userId);
         try {
-            // FIXED: First find in-progress attempt (direct User → Attempt)
+            // 1. Find the most recent in-progress attempt for the user
             const attempt = await prisma.attempt.findFirst({
                 where: { userId, status: 'IN_PROGRESS' },
-                include: { course: true }
+                orderBy: { updatedAt: 'desc' }, // most recent
+                include: { course: true, scormPackage: true }
             });
+
             if (!attempt) return null;
 
-            // FIXED: Then find assignment for that course and user (Assignment → Course)
-            const assignment = await prisma.assignment.findFirst({
-                where: { courseId: attempt.courseId, assigneeUserId: userId },
-                include: { course: true }
-            });
+            // 2. Try to find assignment only if courseId exists
+            let assignment = null;
+            if (attempt.courseId) {
+                assignment = await prisma.assignment.findFirst({
+                    where: {
+                        courseId: attempt.courseId,
+                        assigneeUserId: userId
+                    },
+                    include: { course: true }
+                });
+            }
 
-            return assignment || { course: attempt.course, attempt };  // Fallback to attempt course
+            // 3. Return combined result (prefer assignment if exists, fallback to attempt data)
+            return assignment || {
+                course: attempt.course,
+                attempt,
+                scormPackage: attempt.scormPackage || null
+            };
         } catch (error) {
             console.error('[DASHBOARD MODEL ERROR getCurrentCourse]', error.message);
             return null;

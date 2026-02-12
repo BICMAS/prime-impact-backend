@@ -56,19 +56,17 @@ export const uploadPackage = async (req, res) => {
     }
 };
 
+// src/controllers/ScormController.js (getLaunch)
 export const getLaunch = async (req, res) => {
     try {
         const { id } = req.params;
         console.log('[SCORM CONTROLLER] Launch request for package:', id);
 
         if (!id) {
-            return res.status(400).json({
-                success: false,
-                error: 'Package ID is required'
-            });
+            return res.status(400).json({ success: false, error: 'Package ID required' });
         }
 
-        const launchUrl = await ScormService.getLaunchUrl(
+        const { launchUrl, scormAttemptId } = await ScormService.getLaunchUrl(
             id,
             req.user.id,
             req.user.fullName || req.user.email
@@ -79,19 +77,12 @@ export const getLaunch = async (req, res) => {
         res.json({
             success: true,
             launchUrl,
+            scormAttemptId,   // ← Now returned to frontend
             message: 'Launch URL generated successfully'
         });
-
     } catch (error) {
         console.error('[SCORM CONTROLLER LAUNCH ERROR]', error.message);
-
-        const statusCode = error.message.includes('not found') ? 404 :
-            error.message.includes('permission') ? 403 : 400;
-
-        res.status(statusCode).json({
-            success: false,
-            error: error.message
-        });
+        res.status(400).json({ success: false, error: error.message });
     }
 };
 
