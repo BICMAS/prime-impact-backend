@@ -325,6 +325,57 @@ export class DashboardModel {
             return null;
         }
     }
+
+    static async getQuizStats(userId) {
+        const quizAttempts = await prisma.quizAttempt.findMany({
+            where: { userId },
+            select: { percentage: true, passed: true, score: true }
+        });
+
+        const totalQuizzes = quizAttempts.length;
+        const passed = quizAttempts.filter(q => q.passed).length;
+        const avgQuizScore = totalQuizzes > 0
+            ? quizAttempts.reduce((sum, q) => sum + q.percentage, 0) / totalQuizzes
+            : 0;
+
+        return {
+            totalQuizzes,
+            passedQuizzes: passed,
+            failedQuizzes: totalQuizzes - passed,
+            averageQuizScore: Math.round(avgQuizScore * 100) / 100
+        };
+    }
+
+    static async getDailyLearningActivity(userId, days = 30) {
+        const startDate = new Date();
+        startDate.setDate(startDate.getDate() - days);
+
+        const attempts = await prisma.attempt.findMany({
+            where: {
+                userId,
+                createdAt: { gte: startDate }
+            },
+            select: { createdAt: true, learningHours: true }
+        });
+
+        const activity = {};
+        for (let i = 0; i < days; i++) {
+            const date = new Date();
+            date.setDate(date.getDate() - i);
+            const dateStr = date.toISOString().split('T')[0];
+            activity[dateStr] = 0;
+        }
+
+        attempts.forEach(a => {
+            const dateStr = a.createdAt.toISOString().split('T')[0];
+            if (activity[dateStr] !== undefined) {
+                activity[dateStr] += a.learningHours || 0;
+            }
+        });
+
+        return activity;
+    }
+
     static async getUnfinishedCourses(userId) {
         console.log('[DASHBOARD MODEL] getUnfinishedCourses for userId:', userId);
         try {

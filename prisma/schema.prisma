@@ -108,6 +108,7 @@ model User {
   certificateTemplatesCreated CertificateTemplate[]   @relation("CertificateTemplatesCreated")
   points                      Int                     @default(0)
   scormAttempts               ScormAttempt[]
+  quizAttempts                QuizAttempt[]
 
   @@map("users")
 }
@@ -195,6 +196,7 @@ model Course {
   assignments        Assignment[]  @relation("CourseAssignments") // FIXED: Named for matching
   attempts           Attempt[]
   certificates       Certificate[]
+  quizzes            Quiz[]
 
   @@map("courses")
 }
@@ -412,6 +414,34 @@ model AuditLog {
 
   @@index([eventType, createdAt])
   @@map("audit_logs")
+}
+
+model Quiz {
+  id           String        @id @default(cuid())
+  title        String
+  courseId     String
+  course       Course        @relation(fields: [courseId], references: [id])
+  questions    Json[] // or separate Question model
+  passingScore Float?        @default(70)
+  attempts     QuizAttempt[]
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+}
+
+model QuizAttempt {
+  id            String    @id @default(cuid())
+  userId        String
+  quizId        String
+  quiz          Quiz      @relation(fields: [quizId], references: [id])
+  score         Float // raw score
+  percentage    Float // 0-100
+  passed        Boolean   @default(false)
+  attemptsCount Int       @default(1)
+  completedAt   DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id])
 }
 
 model LearningPath {

@@ -3,7 +3,6 @@ import { ScormCloudService } from '../services/ScormCloudService.js';
 import { AttemptModel } from '../models/AttemptModel.js';
 import { LearningPathEnrolmentModel } from '../models/LearningPathEnrolmentModel.js';
 
-
 export class AttemptService {
     // Your existing course-level update (unchanged)
     static async updateProgress(courseId, data, user) {
@@ -20,7 +19,7 @@ export class AttemptService {
         return attempt;
     }
 
-    // New: Sync progress from SCORM Cloud for a specific ScormAttempt
+    // Sync progress from SCORM Cloud for a specific ScormAttempt
     static async syncScormProgress(scormAttemptId) {
         const scormAttempt = await prisma.scormAttempt.findUnique({
             where: { id: scormAttemptId },
@@ -32,13 +31,13 @@ export class AttemptService {
 
         const registrationId = scormAttempt.scormCloudRegistrationId;
 
-        // FIXED: Use correct endpoint
+        // Pull registration details from SCORM Cloud (correct endpoint)
         const client = ScormCloudService.init();
         const res = await client.get(`/registrations/${registrationId}`);
 
         const registration = res.data;
 
-        // Map fields (adjust based on actual response structure)
+        // Map Cloud data to ScormAttempt
         const updateData = {
             status: registration.registrationCompletion === 'COMPLETED' ? 'COMPLETED' : 'IN_PROGRESS',
             completionPercentage: Math.round((registration.registrationCompletionAmount || 0) * 100),
@@ -58,9 +57,45 @@ export class AttemptService {
 
         // Roll up to course Attempt if linked
         if (updated.attemptId) {
-            await this.rollUpCourseCompletion(updated.attemptId);
+            await AttemptService.rollUpCourseCompletion(updated.attemptId);  // FIXED: call on class name
         }
 
         return updated;
+    }
+
+    // Helper: Parse ISO 8601 duration (e.g. PT1H2M3S) to hours
+    static parseDurationToHours(duration) {
+        if (!duration) return null;
+        const match = duration.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+\.?\d*)S)?/);
+        if (!match) return null;
+        const h = parseFloat(match[1] || 0);
+        const m = parseFloat(match[2] || 0);
+        const s = parseFloat(match[3] || 0);
+        return h + m / 60 + s / 3600;
+    }
+
+    // Roll up package progress to course-level Attempt
+    static async rollUpCourseCompletion(courseAttemptId) {
+        const courseAttempt = await prisma.attempt.findUnique({
+            where: { id: courseAttemptId },
+            include: { scormAttempts: true }
+        });
+
+        if (!courseAttempt) return;
+
+        const packageAttempts = courseAttempt.scormAttempts;
+
+        const avgCompletion = packageAttempts.length > 0
+            ? packageAttempts.reduce((sum, p) => sum + (p.completionPercentage || 0), 0) / packageAttempts.length
+            : 0;
+
+        await prisma.attempt.update({
+            where: { id: courseAttemptId },
+            data: {
+                completionPercentage: avgCompletion,
+                status: avgCompletion >= 100 ? 'COMPLETED' : 'IN_PROGRESS',
+                updatedAt: new Date()
+            }
+        });
     }
 }

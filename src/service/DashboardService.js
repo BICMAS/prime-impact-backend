@@ -75,7 +75,7 @@ export class LearnerDashboardService {
             coursesDone,
             averageScore: Math.round(averageScore * 100) / 100,
             learningPaths,
-            learningActivity, // For frontend chart (e.g., bar chart by day)
+            learningActivity,
             currentCourse,
             unfinishedCourses
         };
