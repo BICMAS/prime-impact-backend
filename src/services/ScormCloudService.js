@@ -136,7 +136,7 @@ export class ScormCloudService {
 
         // Get launch link (correct endpoint)
         const launchPayload = {
-            redirectOnExitUrl: 'https://your-domain.com/lesson-complete' // ← CHANGE THIS
+            redirectOnExitUrl: "https://bicmas-trainee.vercel.app/scorm-exit.html"
         };
 
         const launchRes = await client.post(
