@@ -7,7 +7,8 @@ import {
     getPackage,
     getPackages,
     deletePackage,
-    testConnection
+    testConnection,
+    getUserScormScore
 } from '../controllers/ScormController.js';
 import { authenticateToken, requireRole } from '../middleware/authMiddleware.js';
 import { uploadMiddleware } from '../middleware/fileUploadMiddleware.js';
@@ -60,5 +61,8 @@ scormRouter.delete('/:id',
     requireRole(['SUPER_ADMIN', 'HR_MANAGER']),
     deletePackage
 );
+
+scormRouter.get('/user/scorm-scores', authenticateToken, getUserScormScore);
+
 
 export default scormRouter;

@@ -1,5 +1,7 @@
 // src/controllers/ScormController.js
 import { ScormService } from '../service/ScormService.js';
+import { prisma } from '../utils/db.js';
+import { ScormCloudService } from '../services/ScormCloudService.js';
 
 export const uploadPackage = async (req, res) => {
     console.log('[SCORM CONTROLLER] Upload request received');
@@ -195,6 +197,83 @@ export const testConnection = async (req, res) => {
             success: false,
             error: error.message
         });
+    }
+};
+
+export const getUserScormScore = async (req, res) => {
+    try {
+        const userId = req.user.id;
+
+        const attempts = await prisma.scormAttempt.findMany({
+            where: { userId },
+            select: {
+                id: true,
+                scormPackageId: true,
+                scormCloudRegistrationId: true,
+                completionPercentage: true,
+                score: true,
+                scormCloudScoreScaled: true,
+                updatedAt: true,
+                scormPackage: {
+                    select: {
+                        filename: true  // use this as display name
+                    }
+                }
+            },
+            orderBy: { updatedAt: 'desc' }
+        });
+
+        if (attempts.length === 0) {
+            return res.json({
+                success: true,
+                data: [],
+                message: 'No SCORM attempts found for this user'
+            });
+        }
+
+        // Enrich with SCORM Cloud score (with fallback)
+        const enriched = await Promise.all(
+            attempts.map(async (attempt) => {
+                const result = {
+                    ...attempt,
+                    displayTitle: attempt.scormPackage.filename.replace('.zip', ''), // clean name
+                    cloudScore: null,
+                    lastSync: attempt.updatedAt
+                };
+
+                if (!attempt.scormCloudRegistrationId) {
+                    result.cloudScoreError = 'No registration ID';
+                    return result;
+                }
+
+                try {
+                    const cloudData = await ScormCloudService.getRegistrationScore(
+                        attempt.scormCloudRegistrationId
+                    );
+
+                    result.cloudScore = cloudData;
+                    result.lastSync = new Date(); // mark as freshly synced
+                } catch (err) {
+                    console.warn(`[SCORE FETCH FAIL] Reg ${attempt.scormCloudRegistrationId}:`, err.message);
+                    result.cloudScoreError = 'Latest score unavailable (check SCORM Cloud permissions)';
+                    // Fallback to last known local score
+                    result.cloudScore = {
+                        raw: attempt.score,
+                        scaled: attempt.scormCloudScoreScaled
+                    };
+                }
+
+                return result;
+            })
+        );
+
+        res.json({
+            success: true,
+            data: enriched
+        });
+    } catch (error) {
+        console.error('[GET USER SCORM SCORE ERROR]', error);
+        res.status(500).json({ success: false, error: error.message });
     }
 };
 

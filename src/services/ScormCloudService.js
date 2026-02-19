@@ -168,4 +168,26 @@ export class ScormCloudService {
             return false;
         }
     }
+
+
+    static async getRegistrationScore(registrationId) {
+        const client = this.init();
+        try {
+            const res = await client.get(`/registrations/${registrationId}`);
+            const data = res.data;
+
+            return {
+                raw: data.score?.raw || null,           // actual score (e.g. 85)
+                scaled: data.score?.scaled || null,     // 0–1 scale (e.g. 0.85)
+                min: data.score?.min || null,
+                max: data.score?.max || null,
+                completion: data.completion || null,
+                success: data.success || null,
+                totalSecondsTracked: data.totalSecondsTracked || null
+            };
+        } catch (err) {
+            console.error('[SCORE FETCH ERROR]', err.response?.data || err.message);
+            throw new Error(`Failed to fetch score for registration ${registrationId}`);
+        }
+    }
 }
