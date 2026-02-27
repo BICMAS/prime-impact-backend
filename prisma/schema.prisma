@@ -198,6 +198,7 @@ model Course {
   attempts           Attempt[]
   certificates       Certificate[]
   quizzes            Quiz[]
+  imageUrl           String?
 
   @@map("courses")
 }
