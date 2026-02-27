@@ -275,6 +275,68 @@ export const getUserScormScore = async (req, res) => {
         console.error('[GET USER SCORM SCORE ERROR]', error);
         res.status(500).json({ success: false, error: error.message });
     }
+
+
+
+};
+
+export const syncAndGetUserScormProgress = async (req, res) => {
+    try {
+        const userId = req.user.id;
+        const { courseId } = req.query; // optional filter
+
+        // 1. Find all relevant ScormAttempts for the user
+        const where = { userId };
+        if (courseId) {
+            // Optional: filter by course via linked Attempt
+            where.attempt = { courseId };
+        }
+
+        const attempts = await prisma.scormAttempt.findMany({
+            where,
+            include: { scormPackage: true, attempt: true }
+        });
+
+        if (attempts.length === 0) {
+            return res.json({
+                success: true,
+                data: [],
+                message: 'No SCORM activity found',
+                aggregated: { totalCompletion: 0, averageScore: 0 }
+            });
+        }
+
+        // 2. Sync each attempt from SCORM Cloud
+        const syncedAttempts = await Promise.all(
+            attempts.map(async (attempt) => {
+                try {
+                    return await AttemptService.syncScormProgress(attempt.id);
+                } catch (err) {
+                    console.warn(`Sync failed for attempt ${attempt.id}:`, err.message);
+                    return attempt; // fallback to last known state
+                }
+            })
+        );
+
+        // 3. Optional: aggregate stats for dashboard
+        const totalCompletion = syncedAttempts.reduce((sum, a) => sum + (a.completionPercentage || 0), 0);
+        const avgCompletion = syncedAttempts.length > 0 ? totalCompletion / syncedAttempts.length : 0;
+        const avgScore = syncedAttempts.reduce((sum, a) => sum + (a.score || a.scormCloudScoreScaled * 100 || 0), 0) / syncedAttempts.length || 0;
+
+        res.json({
+            success: true,
+            data: syncedAttempts,
+            aggregated: {
+                totalCompletion: Math.round(avgCompletion),
+                averageScore: Math.round(avgScore),
+                totalPackages: syncedAttempts.length,
+                completedPackages: syncedAttempts.filter(a => a.status === 'COMPLETED').length
+            }
+        });
+    } catch (error) {
+        console.error('[SYNC USER SCORM PROGRESS ERROR]', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
 };
 
 // Helper for file cleanup (if needed)

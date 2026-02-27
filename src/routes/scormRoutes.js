@@ -8,7 +8,8 @@ import {
     getPackages,
     deletePackage,
     testConnection,
-    getUserScormScore
+    getUserScormScore,
+    syncAndGetUserScormProgress
 } from '../controllers/ScormController.js';
 import { authenticateToken, requireRole } from '../middleware/authMiddleware.js';
 import { uploadMiddleware } from '../middleware/fileUploadMiddleware.js';
@@ -63,6 +64,6 @@ scormRouter.delete('/:id',
 );
 
 scormRouter.get('/user/scorm-scores', authenticateToken, getUserScormScore);
-
+scormRouter.get('/scorm-attempts/user/sync', authenticateToken, syncAndGetUserScormProgress);
 
 export default scormRouter;

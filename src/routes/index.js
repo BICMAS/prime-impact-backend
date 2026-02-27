@@ -11,6 +11,7 @@ import certificateRouter from './certificateRouter.js';
 import rewardRouter from './reward.js';
 import attemptRouter from './attemptRoute.js';
 import scormCallbackRouter from './scorm-callback.js';
+import fieldRouter from './fieldTask.js';
 
 const router = Router();
 
@@ -26,5 +27,6 @@ router.use('/certificates', certificateRouter);
 router.use('/rewards', rewardRouter);
 router.use('/attempts', attemptRouter);
 router.use('/scorm-callback', scormCallbackRouter);
+router.use('/field-tasks', fieldRouter);
 
 export default router;
