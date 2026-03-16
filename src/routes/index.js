@@ -12,6 +12,7 @@ import rewardRouter from './reward.js';
 import attemptRouter from './attemptRoute.js';
 import scormCallbackRouter from './scorm-callback.js';
 import fieldRouter from './fieldTask.js';
+import announcementRouter from './announcementRoute.js';
 
 const router = Router();
 
@@ -28,5 +29,6 @@ router.use('/rewards', rewardRouter);
 router.use('/attempts', attemptRouter);
 router.use('/scorm-callback', scormCallbackRouter);
 router.use('/field-tasks', fieldRouter);
+router.use('/announcements', announcementRouter);
 
 export default router;

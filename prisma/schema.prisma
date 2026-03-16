@@ -110,6 +110,7 @@ model User {
   scormAttempts               ScormAttempt[]
   quizAttempts                QuizAttempt[]
   fieldTasks                  FieldTask[]
+  announcements               Announcement[]
 
   @@map("users")
 }
@@ -498,4 +499,17 @@ model FieldTask {
 
   @@index([createdBy])
   @@index([createdAt])
+}
+
+model Announcement {
+  id        String   @id @default(cuid())
+  text      String
+  createdBy String // userId of admin/HR who posted it
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [createdBy], references: [id], onDelete: Cascade)
+
+  @@index([createdAt])
+  @@index([createdBy])
 }
