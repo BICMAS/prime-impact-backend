@@ -137,15 +137,15 @@ export class ScormCloudService {
         // Get launch link (correct endpoint)
         const launchPayload = {
             redirectOnExitUrl: "https://bicmas-trainee.vercel.app/scorm-exit.html",
-            launchAuth: {
-                type: "vault",
-                options: {
-                    ipAddress: true,        // bind to IP (recommended for security)
-                    fingerprint: false,     // usually off (privacy)
-                    expiry: 0,
-                    slidingExpiry: 0
-                }
-            }
+            // launchAuth: {
+            //     type: "vault",
+            //     options: {
+            //         ipAddress: true,        // bind to IP (recommended for security)
+            //         fingerprint: false,     // usually off (privacy)
+            //         expiry: 0,
+            //         slidingExpiry: 0
+            //     }
+            // }
         };
 
         const launchRes = await client.post(
