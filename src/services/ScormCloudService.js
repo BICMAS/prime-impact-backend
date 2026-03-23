@@ -124,28 +124,26 @@ export class ScormCloudService {
             }
         };
 
-        console.log('[LAUNCH] Creating registration:', JSON.stringify(payload, null, 2));
-
         await client.post('/registrations', payload);
         console.log('[LAUNCH] Registration created');
 
-        // Confirm
+        // Confirm registration
         await new Promise(r => setTimeout(r, 2000));
         const confirm = await client.get(`/registrations/${registrationId}`);
         console.log('[LAUNCH] Registration confirmed');
 
-        // Get launch link (correct endpoint)
+        // Launch with Vault (per-launch – this is what support recommends right now)
         const launchPayload = {
             redirectOnExitUrl: "https://bicmas-trainee.vercel.app/scorm-exit.html",
-            // launchAuth: {
-            //     type: "vault",
-            //     options: {
-            //         ipAddress: true,        // bind to IP (recommended for security)
-            //         fingerprint: false,     // usually off (privacy)
-            //         expiry: 0,
-            //         slidingExpiry: 0
-            //     }
-            // }
+            launchAuth: {
+                type: "vault",
+                options: {
+                    ipAddress: true,
+                    fingerprint: false,
+                    expiry: 0,
+                    slidingExpiry: 0
+                }
+            }
         };
 
         const launchRes = await client.post(
