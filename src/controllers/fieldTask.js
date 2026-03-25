@@ -77,18 +77,32 @@ export const getMyFieldTasks = async (req, res) => {
 // src/controllers/FieldTaskController.js
 export const getAllFieldTasks = async (req, res) => {
     try {
-        const { limit = 50, offset = 0, status, createdBy } = req.query;
+        console.log('[DEBUG] getAllFieldTasks called by user:', req.user?.id, 'Role:', req.user?.userRole);
 
-        const where = {};
+        // 1. Total count - no filters
+        const totalCount = await prisma.fieldTask.count();
+        console.log('[DEBUG] Total FieldTask records in DB:', totalCount);
 
-        // Optional filters (admins can use these)
-        if (status) where.status = status; // if you add status later
-        if (createdBy) where.createdBy = createdBy;
+        // 2. Sample records - no where clause
+        const sampleTasks = await prisma.fieldTask.findMany({
+            take: 10,
+            orderBy: { createdAt: 'desc' },
+            select: {
+                id: true,
+                moduleTitle: true,
+                description: true,
+                mediaUrl: true,
+                mediaType: true,
+                createdBy: true,
+                createdAt: true
+            }
+        });
+        console.log('[DEBUG] Sample FieldTask records:', JSON.stringify(sampleTasks, null, 2));
 
+        // 3. Actual query (what you normally use)
         const tasks = await prisma.fieldTask.findMany({
-            where,
-            skip: parseInt(offset),
-            take: parseInt(limit),
+            skip: 0,
+            take: 50,
             orderBy: { createdAt: 'desc' },
             include: {
                 user: {
@@ -102,20 +116,19 @@ export const getAllFieldTasks = async (req, res) => {
             }
         });
 
-        const total = await prisma.fieldTask.count({ where });
-
         res.json({
             success: true,
-            data: tasks,
-            meta: {
-                total,
-                limit: parseInt(limit),
-                offset: parseInt(offset),
-                pageCount: Math.ceil(total / limit)
-            }
+            totalInDB: totalCount,
+            sampleRecords: sampleTasks,
+            data: tasks
         });
+
     } catch (error) {
-        console.error('[GET ALL FIELD TASKS ERROR]', error);
-        res.status(500).json({ success: false, error: error.message });
+        console.error('[GET ALL FIELD TASKS ERROR]', error.message);
+        res.status(500).json({
+            success: false,
+            error: error.message,
+            stack: error.stack
+        });
     }
 };
