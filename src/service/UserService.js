@@ -3,6 +3,12 @@ import { OrganizationModel } from '../models/OrganizationModel.js';
 import bcrypt from 'bcryptjs';
 
 export class UserService {
+    static sanitizeUser(user) {
+        if (!user) return user;
+        // Never return hashed password
+        const { password, ...rest } = user;
+        return rest;
+    }
 
     static async getAllUsers(requester) {
         console.log('[SERVICE GET USERS] Role:', requester.userRole, 'OrgId:', requester.orgId);
@@ -96,5 +102,95 @@ export class UserService {
         return { ...user, password: undefined };
     }
 
+    static async updateUser(id, updates, requester) {
+        if (!id) throw new Error('User ID required');
+        if (!updates || typeof updates !== 'object') throw new Error('Updates payload required');
 
+        const existing = await UserModel.findById(id);
+        if (!existing) throw new Error('User not found');
+
+        // HR can only manage users within their org and should not be able to escalate roles
+        const requesterRole = requester?.userRole;
+        const requesterOrgId = requester?.orgId;
+
+        if (requesterRole === 'HR_MANAGER') {
+            if (!requesterOrgId) throw new Error('HR must be in an organization');
+            if (existing.orgId !== requesterOrgId) throw new Error('Access denied');
+        } else if (!requesterRole || requesterRole !== 'SUPER_ADMIN') {
+            throw new Error('Insufficient role to update users');
+        }
+
+        const allowedFields = requesterRole === 'HR_MANAGER'
+            ? [
+                'fullName',
+                'email',
+                'phoneNumber',
+                'department',
+                'username',
+                'groupId',
+                'status',
+                'authProvider',
+                'points'
+            ]
+            : [
+                'fullName',
+                'email',
+                'phoneNumber',
+                'department',
+                'userRole',
+                'username',
+                'orgId',
+                'groupId',
+                'status',
+                'authProvider',
+                'points'
+            ];
+
+        const data = {};
+        for (const key of allowedFields) {
+            if (Object.prototype.hasOwnProperty.call(updates, key)) {
+                data[key] = updates[key];
+            }
+        }
+
+        if (Object.prototype.hasOwnProperty.call(updates, 'password')) {
+            if (!updates.password) throw new Error('Password cannot be empty');
+            data.password = await bcrypt.hash(updates.password, 12);
+        }
+
+        const updated = await UserModel.update(id, data);
+        return UserService.sanitizeUser(updated);
+    }
+
+    static async blockUser(id) {
+        const existing = await UserModel.findById(id);
+        if (!existing) throw new Error('User not found');
+        const updated = await UserModel.update(id, { status: 'BLOCKED' });
+        return UserService.sanitizeUser(updated);
+    }
+
+    static async unblockUser(id) {
+        const existing = await UserModel.findById(id);
+        if (!existing) throw new Error('User not found');
+        const updated = await UserModel.update(id, { status: 'ACTIVE' });
+        return UserService.sanitizeUser(updated);
+    }
+
+    static async deleteUser(id, requester) {
+        const existing = await UserModel.findById(id);
+        if (!existing) throw new Error('User not found');
+
+        if (!requester?.userRole) throw new Error('Insufficient role to delete users');
+        if (existing.userRole === 'SUPER_ADMIN') throw new Error('Cannot delete SUPER_ADMIN');
+
+        if (requester.userRole === 'HR_MANAGER') {
+            if (!requester.orgId) throw new Error('HR must be in an organization');
+            if (existing.orgId !== requester.orgId) throw new Error('Access denied');
+        } else if (requester.userRole !== 'SUPER_ADMIN') {
+            throw new Error('Insufficient role to delete users');
+        }
+
+        await UserModel.deleteById(id);
+        return UserService.sanitizeUser(existing);
+    }
 }

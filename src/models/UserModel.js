@@ -13,6 +13,10 @@ export class UserModel {
         return prisma.user.update({ where: { id }, data: updates });
     }
 
+    static async deleteById(id) {
+        return prisma.user.delete({ where: { id } });
+    }
+
     static async findByPhone(phoneNumber) {
         return prisma.user.findUnique({ where: { phoneNumber } });
     }
@@ -46,6 +50,14 @@ export class UserModel {
     static async findByOrgId(orgId) {
         console.log(`[MODEL] Finding users by orgId: ${orgId}`);
         return prisma.user.findMany({ where: { orgId } });
+    }
+
+    static async findLearnersByOrgId(orgId) {
+        console.log(`[MODEL] Finding learners by orgId: ${orgId}`);
+        return prisma.user.findMany({
+            where: { orgId, userRole: 'LEARNER' },
+            select: { id: true, fullName: true, email: true, userRole: true, status: true, orgId: true }
+        });
     }
 
     static async bulkCreate(csvData) {

@@ -59,10 +59,43 @@ export const createUser = async (req, res) => {
 export const updateUser = async (req, res) => {
     try {
         const { id } = req.params;
-        const result = await UserService.updateUser(id, req.body);
+        const result = await UserService.updateUser(id, req.body, req.user);
         res.json(result);
     } catch (error) {
         res.status(400).json({ error: error.message });
+    }
+};
+
+export const blockUser = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const result = await UserService.blockUser(id);
+        res.json(result);
+    } catch (error) {
+        const status = error.message === 'User not found' ? 404 : 400;
+        res.status(status).json({ error: error.message });
+    }
+};
+
+export const unblockUser = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const result = await UserService.unblockUser(id);
+        res.json(result);
+    } catch (error) {
+        const status = error.message === 'User not found' ? 404 : 400;
+        res.status(status).json({ error: error.message });
+    }
+};
+
+export const deleteUser = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const result = await UserService.deleteUser(id, req.user);
+        res.json(result);
+    } catch (error) {
+        const status = error.message === 'User not found' ? 404 : 400;
+        res.status(status).json({ error: error.message });
     }
 };
 
