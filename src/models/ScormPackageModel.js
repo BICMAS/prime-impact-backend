@@ -18,6 +18,15 @@ import fs from 'fs';
 import path from 'path';
 
 export class ScormPackageModel {
+    static getErrorMessage(error, fallback = 'SCORM launch failed') {
+        const status = error?.response?.status;
+        const data = error?.response?.data;
+        const detail = typeof data === 'string'
+            ? data
+            : data?.message || data?.error || (data && Object.keys(data).length > 0 ? JSON.stringify(data) : null);
+        return `${fallback}${status ? ` (status ${status})` : ''}: ${detail || error.message || 'Unknown launch error'}`;
+    }
+
     static async uploadAndExtract(filePath, filename, uploadedBy, lessonId = null) {
         console.log('[MODEL] Uploading to SCORM Cloud', { filename, lessonId });
 
@@ -58,7 +67,7 @@ export class ScormPackageModel {
         });
     }
 
-    static async getLaunchUrl(packageId, userId, userFullName) {
+    static async getLaunchUrl(packageId, userId, userFullName, options = {}) {
         console.log('[LAUNCH] Getting URL for package:', packageId, 'user:', userId);
 
         const pkg = await this.findById(packageId);
@@ -79,25 +88,7 @@ export class ScormPackageModel {
         let registrationId = scormAttempt?.scormCloudRegistrationId;
         let launchUrl;
 
-        if (registrationId) {
-            console.log(`[LAUNCH REUSE] Using existing registrationId: ${registrationId}`);
-
-            const client = ScormCloudService.init();
-
-            const launchPayload = {
-                redirectOnExitUrl: 'https://your-domain.com/lesson-complete' // CHANGE THIS
-            };
-
-            const launchRes = await client.post(
-                `/registrations/${registrationId}/launchLink`,
-                launchPayload
-            );
-
-            launchUrl = launchRes.data.launchLink;
-            if (!launchUrl) throw new Error('No launchLink returned');
-        } else {
-            console.log('[LAUNCH] No existing registration → creating new');
-
+        const createFreshRegistrationAndLaunch = async () => {
             const result = await ScormCloudService.createLaunchLink(
                 scormCloudId,
                 userId,
@@ -106,26 +97,66 @@ export class ScormPackageModel {
 
             registrationId = result.registrationId;
             launchUrl = result.launchUrl;
+            return result;
+        };
 
-            // Create ScormAttempt and link to course Attempt if possible
-            const courseAttempt = await prisma.attempt.findFirst({
-                where: { userId, courseId: pkg.courseId || null },
-                select: { id: true }
-            });
+        try {
+            if (registrationId) {
+                console.log(`[LAUNCH REUSE] Using existing registrationId: ${registrationId}`);
 
-            scormAttempt = await prisma.scormAttempt.create({
-                data: {
-                    userId,
-                    scormPackageId: packageId,
-                    attemptId: courseAttempt?.id || null,
-                    scormCloudRegistrationId: registrationId,
-                    status: 'IN_PROGRESS',
-                    createdAt: new Date(),
-                    updatedAt: new Date()
+                const client = ScormCloudService.init();
+
+                const launchPayload = {
+                    redirectOnExitUrl: 'https://your-domain.com/lesson-complete' // CHANGE THIS
+                };
+
+                try {
+                    const launchRes = await client.post(
+                        `/registrations/${registrationId}/launchLink`,
+                        launchPayload
+                    );
+
+                    launchUrl = launchRes.data.launchLink;
+                    if (!launchUrl) throw new Error('No launchLink returned');
+                } catch (error) {
+                    const status = error?.response?.status;
+                    const shouldRecreate = status === 404 || status === 400;
+                    if (!shouldRecreate) throw error;
+
+                    console.warn(`[LAUNCH REUSE FAIL] registrationId ${registrationId} unavailable in cloud. Recreating...`);
+                    await createFreshRegistrationAndLaunch();
+
+                    await prisma.scormAttempt.update({
+                        where: { id: scormAttempt.id },
+                        data: { scormCloudRegistrationId: registrationId, updatedAt: new Date() }
+                    });
                 }
-            });
+            } else {
+                console.log('[LAUNCH] No existing registration → creating new');
+                await createFreshRegistrationAndLaunch();
 
-            console.log(`[LAUNCH] Created ScormAttempt ${scormAttempt.id} with regId ${registrationId}`);
+                // Create ScormAttempt and link to course Attempt if possible
+                const courseAttempt = await prisma.attempt.findFirst({
+                    where: { userId, courseId: options.courseId || null },
+                    select: { id: true }
+                });
+
+                scormAttempt = await prisma.scormAttempt.create({
+                    data: {
+                        userId,
+                        scormPackageId: packageId,
+                        attemptId: courseAttempt?.id || null,
+                        scormCloudRegistrationId: registrationId,
+                        status: 'IN_PROGRESS',
+                        createdAt: new Date(),
+                        updatedAt: new Date()
+                    }
+                });
+
+                console.log(`[LAUNCH] Created ScormAttempt ${scormAttempt.id} with regId ${registrationId}`);
+            }
+        } catch (error) {
+            throw new Error(this.getErrorMessage(error, 'Failed to create SCORM launch URL'));
         }
 
         // Always return both values to frontend

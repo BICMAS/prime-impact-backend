@@ -71,7 +71,8 @@ export const getLaunch = async (req, res) => {
         const { launchUrl, scormAttemptId } = await ScormService.getLaunchUrl(
             id,
             req.user.id,
-            req.user.fullName || req.user.email
+            req.user.fullName || req.user.email,
+            req.query
         );
 
         console.log('[SCORM CONTROLLER] Launch URL generated');
