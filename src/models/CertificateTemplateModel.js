@@ -38,4 +38,11 @@ export class CertificateTemplateModel {
             include: { creator: true }
         });
     }
+
+    static async findLatest() {
+        return prisma.certificateTemplate.findFirst({
+            orderBy: { createdAt: 'desc' },
+            include: { creator: true }
+        });
+    }
 }

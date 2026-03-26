@@ -1,4 +1,6 @@
 import { DashboardModel } from '../models/DashboardModel.js';
+import { UserModel } from '../models/UserModel.js';
+import { AttemptModel } from '../models/AttemptModel.js';
 
 export class DashboardService {
     static async getHRDashboard(orgId) {
@@ -79,5 +81,62 @@ export class LearnerDashboardService {
             currentCourse,
             unfinishedCourses
         };
+    }
+}
+
+export class HRCourseTrackingService {
+    static async getLearnerCourseTracking({ orgId }, learnerId) {
+        if (!orgId) throw new Error('HR must be in an organization');
+        if (!learnerId) throw new Error('Learner ID required');
+
+        const learner = await UserModel.findById(learnerId);
+        if (!learner) throw new Error('Learner not found');
+        if (learner.orgId !== orgId) throw new Error('Access denied');
+
+        // AttemptModel is course-level progress (one attempt per userId+courseId via upsert)
+        const attempts = await AttemptModel.findByUserId(learnerId);
+
+        const currentCourse = await DashboardModel.getCurrentCourse(learnerId);
+        const unfinishedCourses = await DashboardModel.getUnfinishedCourses(learnerId);
+
+        return {
+            learner: {
+                id: learner.id,
+                fullName: learner.fullName,
+                email: learner.email,
+                userRole: learner.userRole,
+                status: learner.status,
+                orgId: learner.orgId
+            },
+            attempts,
+            currentCourse,
+            unfinishedCourses
+        };
+    }
+
+    static async getAllLearnersCourseTracking({ orgId }) {
+        if (!orgId) throw new Error('HR must be in an organization');
+
+        const learners = await UserModel.findLearnersByOrgId(orgId);
+        if (!learners || learners.length === 0) {
+            return { learners: [], count: 0 };
+        }
+
+        const tracking = await Promise.all(
+            learners.map(async (learner) => {
+                const attempts = await AttemptModel.findByUserId(learner.id);
+                const currentCourse = await DashboardModel.getCurrentCourse(learner.id);
+                const unfinishedCourses = await DashboardModel.getUnfinishedCourses(learner.id);
+
+                return {
+                    learner,
+                    attempts,
+                    currentCourse,
+                    unfinishedCourses
+                };
+            })
+        );
+
+        return { learners: tracking, count: tracking.length };
     }
 }

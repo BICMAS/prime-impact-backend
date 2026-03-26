@@ -1,4 +1,4 @@
-import { DashboardService, LearnerDashboardService } from '../service/DashboardService.js';
+import { DashboardService, HRCourseTrackingService, LearnerDashboardService } from '../service/DashboardService.js';
 import { authenticateToken, requireRole } from '../middleware/authMiddleware.js';
 
 export const getHRDashboard = async (req, res) => {
@@ -30,5 +30,26 @@ export const getLearnerDashboard = async (req, res) => {
         res.json(result);
     } catch (error) {
         res.status(403).json({ error: error.message });
+    }
+};
+
+export const getLearnerCourseTracking = async (req, res) => {
+    try {
+        const { learnerId } = req.params;
+        const result = await HRCourseTrackingService.getLearnerCourseTracking(req.user, learnerId);
+        return res.json(result);
+    } catch (error) {
+        const status = error.message === 'Learner not found' ? 404 : 403;
+        return res.status(status).json({ error: error.message });
+    }
+};
+
+export const getAllLearnersCourseTracking = async (req, res) => {
+    try {
+        const result = await HRCourseTrackingService.getAllLearnersCourseTracking(req.user);
+        return res.json(result);
+    } catch (error) {
+        const status = error.message === 'HR must be in an organization' ? 403 : 403;
+        return res.status(status).json({ error: error.message });
     }
 };

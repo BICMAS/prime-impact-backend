@@ -27,14 +27,93 @@ export const uploadTemplate = (req, res) => {
             const uploadedBy = req.user.id;
             const { description } = req.body;  // Optional
             const result = await CertificateTemplateService.uploadTemplate(req.file.path, req.file.originalname, description, uploadedBy);
-            fs.unlinkSync(req.file.path);  // Clean temp
             res.status(201).json({
                 url: result.blobUrl,
                 id: result.id,
-                filename: result.filename
+                filename: result.filename,
+                downloadUrl: `${req.protocol}://${req.get('host')}/api/v1/certificates/${result.id}/download`
             });
         } catch (error) {
             res.status(400).json({ error: error.message });
+        } finally {
+            if (req.file?.path && fs.existsSync(req.file.path)) {
+                fs.unlinkSync(req.file.path);  // Clean temp
+            }
         }
     });
+};
+
+export const downloadTemplate = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const template = await CertificateTemplateService.getTemplateById(id);
+
+        const response = await fetch(template.blobUrl);
+        if (!response.ok) {
+            throw new Error('Failed to fetch template file');
+        }
+
+        const fileBuffer = Buffer.from(await response.arrayBuffer());
+        res.setHeader('Content-Type', template.mimeType || 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="${template.filename}"`);
+        return res.status(200).send(fileBuffer);
+    } catch (error) {
+        const status = error.message === 'Certificate template not found' ? 404 : 400;
+        return res.status(status).json({ error: error.message });
+    }
+};
+
+export const downloadLatestTemplate = async (req, res) => {
+    try {
+        const template = await CertificateTemplateService.getLatestTemplate();
+
+        const response = await fetch(template.blobUrl);
+        if (!response.ok) {
+            throw new Error('Failed to fetch template file');
+        }
+
+        const fileBuffer = Buffer.from(await response.arrayBuffer());
+        res.setHeader('Content-Type', template.mimeType || 'application/pdf');
+        res.setHeader('Content-Disposition', `attachment; filename="${template.filename}"`);
+        return res.status(200).send(fileBuffer);
+    } catch (error) {
+        const status = error.message === 'No certificate templates found' ? 404 : 400;
+        return res.status(status).json({ error: error.message });
+    }
+};
+
+export const assignTemplateToCourse = async (req, res) => {
+    try {
+        const { courseId, templateId } = req.body;
+        const result = await CertificateTemplateService.assignTemplateToCourse(courseId, templateId, req.user.id);
+        return res.status(200).json({
+            message: 'Template assigned to course successfully',
+            ...result
+        });
+    } catch (error) {
+        const knownNotFound = ['Course not found', 'Certificate template not found'];
+        const status = knownNotFound.includes(error.message) ? 404 : 400;
+        return res.status(status).json({ error: error.message });
+    }
+};
+
+export const issueCertificate = async (req, res) => {
+    try {
+        const { userId, courseId, templateId } = req.body;
+        const result = await CertificateTemplateService.issueCertificate({
+            userId,
+            courseId,
+            templateId,
+            issuerId: req.user.id
+        });
+        return res.status(201).json(result);
+    } catch (error) {
+        const knownNotFound = [
+            'User not found',
+            'Course not found',
+            'Certificate template not found'
+        ];
+        const status = knownNotFound.includes(error.message) ? 404 : 400;
+        return res.status(status).json({ error: error.message });
+    }
 };
