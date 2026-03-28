@@ -23,7 +23,7 @@ app.use(express.urlencoded({ limit: '200mb', extended: true }));
 
 
 app.use((req, res, next) => {
-    req.setTimeout(300000);  // 5min per request
+    req.setTimeout(300000);  // 5min per request for everything
     res.setTimeout(300000);
     next();
 });
