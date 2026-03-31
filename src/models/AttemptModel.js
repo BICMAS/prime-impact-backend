@@ -29,4 +29,10 @@ export class AttemptModel {
             orderBy: { createdAt: 'desc' }
         });
     }
+
+    static async findByUserAndCourse(userId, courseId) {
+        return prisma.attempt.findUnique({
+            where: { userId_courseId: { userId, courseId } }
+        });
+    }
 }

@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import { prisma } from '../utils/db.js';
 
 const COURSE_TEMPLATE_EVENT = 'COURSE_TEMPLATE_ASSIGNED';
+const ORG_TEMPLATE_EVENT = 'ORG_CERT_TEMPLATE_ASSIGNED';
 
 export class CertificateModel {
     static async findCertificateByUserAndCourse(userId, courseId) {
@@ -10,13 +11,14 @@ export class CertificateModel {
         });
     }
 
-    static async createCertificate({ userId, courseId, templateId, pdfPath }) {
+    static async createCertificate({ userId, courseId, templateId, pdfPath, issuedAt }) {
         return prisma.certificate.create({
             data: {
                 userId,
                 courseId,
                 templateId,
                 pdfPath,
+                issuedAt: issuedAt || new Date(),
                 verificationHash: crypto.randomUUID()
             }
         });
@@ -63,5 +65,36 @@ export class CertificateModel {
 
         if (!log?.payload || typeof log.payload !== 'object') return null;
         return log.payload?.templateId || null;
+    }
+
+    static async assignTemplateToOrgHR({ orgId, hrManagerId, templateId, actorId }) {
+        return prisma.auditLog.create({
+            data: {
+                eventType: ORG_TEMPLATE_EVENT,
+                actorId,
+                targetType: 'ORGANIZATION',
+                targetId: orgId,
+                payload: { orgId, hrManagerId, templateId }
+            }
+        });
+    }
+
+    static async getAssignedTemplateForHR(orgId, hrManagerId) {
+        const logs = await prisma.auditLog.findMany({
+            where: {
+                eventType: ORG_TEMPLATE_EVENT,
+                targetType: 'ORGANIZATION',
+                targetId: orgId
+            },
+            orderBy: { createdAt: 'desc' },
+            take: 50
+        });
+
+        const match = logs.find((log) => {
+            const payload = log?.payload;
+            return payload && typeof payload === 'object' && payload.hrManagerId === hrManagerId;
+        });
+        if (!match?.payload || typeof match.payload !== 'object') return null;
+        return match.payload?.templateId || null;
     }
 }

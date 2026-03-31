@@ -28,6 +28,15 @@ export class AssignmentModel {
         });
     }
 
+    static async findByCourseAndLearner(courseId, learnerId) {
+        return prisma.assignment.findFirst({
+            where: {
+                courseId,
+                assigneeUserId: learnerId
+            }
+        });
+    }
+
     static async getAssignedCourses(learnerId) {  // FIXED: Renamed from findByLearnerId, full nested includes
         console.log('[ASSIGNMENT MODEL] getAssignedCourses for learnerId:', learnerId);
         return prisma.assignment.findMany({

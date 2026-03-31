@@ -85,13 +85,63 @@ export const downloadLatestTemplate = async (req, res) => {
 export const assignTemplateToCourse = async (req, res) => {
     try {
         const { courseId, templateId } = req.body;
-        const result = await CertificateTemplateService.assignTemplateToCourse(courseId, templateId, req.user.id);
+        const result = await CertificateTemplateService.assignTemplateToCourse(courseId, templateId, req.user.id, req.user);
         return res.status(200).json({
             message: 'Template assigned to course successfully',
             ...result
         });
     } catch (error) {
         const knownNotFound = ['Course not found', 'Certificate template not found'];
+        const status = knownNotFound.includes(error.message) ? 404 : 400;
+        return res.status(status).json({ error: error.message });
+    }
+};
+
+export const assignTemplateToHRManager = async (req, res) => {
+    try {
+        const { templateId, orgId, hrManagerId } = req.body;
+        const result = await CertificateTemplateService.assignTemplateToHRManager({
+            templateId,
+            orgId,
+            hrManagerId,
+            actorId: req.user.id
+        });
+        return res.status(200).json({
+            message: 'Template assigned to HR manager successfully',
+            ...result
+        });
+    } catch (error) {
+        const knownNotFound = ['Certificate template not found', 'HR manager not found'];
+        const status = knownNotFound.includes(error.message) ? 404 : 400;
+        return res.status(status).json({ error: error.message });
+    }
+};
+
+export const getMyAssignedTemplate = async (req, res) => {
+    try {
+        const result = await CertificateTemplateService.getAssignedTemplateForHRManager(req.user.id, req.user.orgId);
+        return res.status(200).json(result);
+    } catch (error) {
+        const knownNotFound = [
+            'No certificate template assigned to this HR manager',
+            'Certificate template not found'
+        ];
+        const status = knownNotFound.includes(error.message) ? 404 : 400;
+        return res.status(status).json({ error: error.message });
+    }
+};
+
+export const getCourseAssignedTemplate = async (req, res) => {
+    try {
+        const { courseId } = req.params;
+        const result = await CertificateTemplateService.getAssignedTemplateForCourse(courseId);
+        return res.status(200).json(result);
+    } catch (error) {
+        const knownNotFound = [
+            'Course not found',
+            'No template assigned to course',
+            'Certificate template not found'
+        ];
         const status = knownNotFound.includes(error.message) ? 404 : 400;
         return res.status(status).json({ error: error.message });
     }
@@ -104,7 +154,8 @@ export const issueCertificate = async (req, res) => {
             userId,
             courseId,
             templateId,
-            issuerId: req.user.id
+            issuerId: req.user.id,
+            requester: req.user
         });
         return res.status(201).json(result);
     } catch (error) {
@@ -114,6 +165,27 @@ export const issueCertificate = async (req, res) => {
             'Certificate template not found'
         ];
         const status = knownNotFound.includes(error.message) ? 404 : 400;
+        return res.status(status).json({ error: error.message });
+    }
+};
+
+export const claimLearnerCertificate = async (req, res) => {
+    try {
+        const { courseId } = req.params;
+        const result = await CertificateTemplateService.claimLearnerCertificate(req.user.id, courseId);
+        return res.status(200).json(result);
+    } catch (error) {
+        const knownNotFound = [
+            'Course not assigned to learner',
+            'Course not found',
+            'No template assigned to course',
+            'Certificate template not found'
+        ];
+        const status = error.message === 'Course not yet completed'
+            ? 403
+            : knownNotFound.includes(error.message)
+                ? 404
+                : 400;
         return res.status(status).json({ error: error.message });
     }
 };
