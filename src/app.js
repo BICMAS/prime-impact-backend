@@ -63,7 +63,9 @@ app.use((err, req, res, next) => {
     if (res.headersSent) {
         return next(err);
     }
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(err?.statusCode || 500).json({
+        error: err?.message || 'Internal server error'
+    });
 });
 
 const server = app.listen(port, () => {

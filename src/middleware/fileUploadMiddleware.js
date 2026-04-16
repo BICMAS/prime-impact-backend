@@ -26,4 +26,14 @@ const upload = multer({
     }
 });
 
-export const uploadMiddleware = upload.single('package');  // FIXED: Exported for route use
+// Wrap Multer so we can return the real Multer error message to clients.
+export const uploadMiddleware = (req, res, next) => {
+    const handler = upload.single('package');
+    handler(req, res, (err) => {
+        if (err) {
+            const message = err?.message || 'File upload failed';
+            return res.status(400).json({ error: message });
+        }
+        return next();
+    });
+};
