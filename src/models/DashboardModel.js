@@ -66,8 +66,10 @@ export class DashboardModel {
             console.log('[DASHBOARD MODEL] getTopPerformers for orgId:', orgId);
             const users = await prisma.user.findMany({
                 where: { orgId, userRole: 'LEARNER', status: 'ACTIVE' },
-                select: { id: true, fullName: true, email: true },
-                include: {
+                select: {
+                    id: true,
+                    fullName: true,
+                    email: true,
                     attempts: {
                         select: { completionPercentage: true },
                         where: { status: 'COMPLETED' }
@@ -91,24 +93,30 @@ export class DashboardModel {
     static async getCompletionByDepartment(orgId) {
         try {
             console.log('[DASHBOARD MODEL] getCompletionByDepartment for orgId:', orgId);
-            const depts = await prisma.department.findMany({
+            const users = await prisma.user.findMany({
                 where: { orgId },
-                include: {
-                    users: {
-                        where: { userRole: 'LEARNER', status: 'ACTIVE' },
-                        include: { attempts: true }
-                    }
+                select: {
+                    department: true,
+                    attempts: true
                 }
             });
-            return depts.map(d => {
-                const users = d.users;
+            const activeLearners = users.filter((u) => u.department);
+            const grouped = activeLearners.reduce((acc, user) => {
+                const department = user.department;
+                if (!acc[department]) acc[department] = [];
+                acc[department].push(user);
+                return acc;
+            }, {});
+
+            return Object.entries(grouped).map(([department, departmentUsers]) => {
+                const now = new Date();
                 return {
-                    department: d.name,
-                    totalLearners: users.length,
-                    completed: users.filter(u => u.attempts.some(a => a.status === 'COMPLETED')).length,
-                    inProgress: users.filter(u => u.attempts.some(a => a.status === 'IN_PROGRESS')).length,
-                    notStarted: users.filter(u => u.attempts.length === 0).length,
-                    overdue: users.filter(u => u.attempts.some(a => a.dueDate < new Date() && a.status !== 'COMPLETED')).length
+                    department,
+                    totalLearners: departmentUsers.length,
+                    completed: departmentUsers.filter((u) => u.attempts.some((a) => a.status === 'COMPLETED')).length,
+                    inProgress: departmentUsers.filter((u) => u.attempts.some((a) => a.status === 'IN_PROGRESS')).length,
+                    notStarted: departmentUsers.filter((u) => u.attempts.length === 0).length,
+                    overdue: departmentUsers.filter((u) => u.attempts.some((a) => a.dueDate && a.dueDate < now && a.status !== 'COMPLETED')).length
                 };
             });
         } catch (error) {

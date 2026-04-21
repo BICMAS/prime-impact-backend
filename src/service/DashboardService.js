@@ -85,6 +85,39 @@ export class LearnerDashboardService {
 }
 
 export class HRCourseTrackingService {
+    static buildLearnerStats(attempts = [], unfinishedCourses = []) {
+        const assignedCourses = unfinishedCourses.length;
+        const completedAttempts = attempts.filter((a) => a.status === 'COMPLETED');
+        const inProgressAttempts = attempts.filter((a) => a.status === 'IN_PROGRESS');
+        const overdueAttempts = attempts.filter((a) => a.dueDate && a.dueDate < new Date() && a.status !== 'COMPLETED');
+
+        const uniqueCompletedCourses = new Set(
+            completedAttempts
+                .map((a) => a.courseId)
+                .filter(Boolean)
+        ).size;
+
+        const avgCompletionRaw = attempts.length > 0
+            ? attempts.reduce((sum, a) => sum + (a.completionPercentage || 0), 0) / attempts.length
+            : 0;
+
+        const latestActivityDate = attempts.reduce((latest, attempt) => {
+            const updatedAt = attempt?.updatedAt ? new Date(attempt.updatedAt) : null;
+            if (!updatedAt) return latest;
+            if (!latest) return updatedAt;
+            return updatedAt > latest ? updatedAt : latest;
+        }, null);
+
+        return {
+            assignedCourses,
+            completedCourses: uniqueCompletedCourses,
+            inProgressCourses: inProgressAttempts.length,
+            overdueCourses: overdueAttempts.length,
+            avgCompletion: Math.round(avgCompletionRaw * 100) / 100,
+            lastActiveAt: latestActivityDate ? latestActivityDate.toISOString() : null
+        };
+    }
+
     static async getLearnerCourseTracking({ orgId }, learnerId) {
         if (!orgId) throw new Error('HR must be in an organization');
         if (!learnerId) throw new Error('Learner ID required');
@@ -98,6 +131,7 @@ export class HRCourseTrackingService {
 
         const currentCourse = await DashboardModel.getCurrentCourse(learnerId);
         const unfinishedCourses = await DashboardModel.getUnfinishedCourses(learnerId);
+        const stats = HRCourseTrackingService.buildLearnerStats(attempts, unfinishedCourses);
 
         return {
             learner: {
@@ -110,7 +144,8 @@ export class HRCourseTrackingService {
             },
             attempts,
             currentCourse,
-            unfinishedCourses
+            unfinishedCourses,
+            stats
         };
     }
 
@@ -127,12 +162,14 @@ export class HRCourseTrackingService {
                 const attempts = await AttemptModel.findByUserId(learner.id);
                 const currentCourse = await DashboardModel.getCurrentCourse(learner.id);
                 const unfinishedCourses = await DashboardModel.getUnfinishedCourses(learner.id);
+                const stats = HRCourseTrackingService.buildLearnerStats(attempts, unfinishedCourses);
 
                 return {
                     learner,
                     attempts,
                     currentCourse,
-                    unfinishedCourses
+                    unfinishedCourses,
+                    stats
                 };
             })
         );
