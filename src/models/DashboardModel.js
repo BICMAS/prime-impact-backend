@@ -146,30 +146,51 @@ export class DashboardModel {
     static async getCourseStatus(orgId) {
         try {
             console.log('[DASHBOARD MODEL] getCourseStatus for orgId:', orgId);
-            const [completedAttempts, completedCertificates, inProgress, notStarted, overdue] = await Promise.all([
-                prisma.attempt.count({ where: { user: { orgId }, status: 'COMPLETED' } }),
-                prisma.certificate.count({ where: { user: { orgId } } }),
-                prisma.attempt.count({ where: { user: { orgId }, status: 'IN_PROGRESS' } }),
-                prisma.assignment.count({
-                    where: {
-                        AND: [
-                            assignmentWhereForOrg(orgId),
-                            { attempts: { none: {} } }
-                        ]
+            const now = new Date();
+            const learners = await prisma.user.findMany({
+                where: { orgId, userRole: 'LEARNER', status: 'ACTIVE' },
+                select: {
+                    userAttempts: {
+                        select: {
+                            status: true,
+                            dueDate: true
+                        }
                     }
-                }),
-                prisma.assignment.count({
-                    where: {
-                        AND: [
-                            assignmentWhereForOrg(orgId),
-                            { dueDate: { lt: new Date() } },
-                            { attempts: { none: { status: 'COMPLETED' } } }
-                        ]
-                    }
-                })
-            ]);
-            const completed = completedAttempts > 0 ? completedAttempts : completedCertificates;
-            return { completed, inProgress, notStarted, overdue };
+                }
+            });
+
+            const courseStatus = learners.reduce((acc, learner) => {
+                const attempts = learner.userAttempts || [];
+
+                if (attempts.length === 0) {
+                    acc.notStarted += 1;
+                    return acc;
+                }
+
+                const hasOverdue = attempts.some((a) => a.dueDate && a.dueDate < now && a.status !== 'COMPLETED');
+                if (hasOverdue) {
+                    acc.overdue += 1;
+                    return acc;
+                }
+
+                const hasInProgress = attempts.some((a) => a.status === 'IN_PROGRESS');
+                if (hasInProgress) {
+                    acc.inProgress += 1;
+                    return acc;
+                }
+
+                const hasCompleted = attempts.some((a) => a.status === 'COMPLETED');
+                if (hasCompleted) {
+                    acc.completed += 1;
+                    return acc;
+                }
+
+                // Fallback for statuses that are neither completed nor in-progress.
+                acc.notStarted += 1;
+                return acc;
+            }, { completed: 0, inProgress: 0, notStarted: 0, overdue: 0 });
+
+            return courseStatus;
         } catch (error) {
             console.error('[DASHBOARD MODEL ERROR getCourseStatus]', error.message);
             return { completed: 0, inProgress: 0, notStarted: 0, overdue: 0 };
