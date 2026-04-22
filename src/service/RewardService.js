@@ -14,6 +14,11 @@ export class RewardService {
             throw new Error('Learner must be active');
         }
 
+        // HR_MANAGER can only award learners inside their own organization.
+        if (awarder.userRole === 'HR_MANAGER' && learner.orgId !== awarder.orgId) {
+            throw new Error('Access denied: HR can only award learners in the same organization');
+        }
+
         const updatedLearner = await UserModel.updatePoints(learnerId, points);
 
         // Optional audit log
