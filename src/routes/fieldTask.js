@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import multer from 'multer';
 import { createFieldTask, getAllFieldTasks, getMyFieldTasks } from '../controllers/fieldTask.js';
-import { authenticateToken } from '../middleware/authMiddleware.js';
+import { authenticateToken, requireRole } from '../middleware/authMiddleware.js';
 
 const fieldRouter = Router();
 
@@ -14,10 +14,11 @@ const upload = multer({
         else cb(new Error('Only images and videos allowed'));
     }
 });
-fieldRouter.get('/', authenticateToken, getAllFieldTasks);
+fieldRouter.get('/', authenticateToken, requireRole(['HR_MANAGER', 'SUPER_ADMIN']), getAllFieldTasks);
+fieldRouter.get('/me', authenticateToken, requireRole('LEARNER'), getMyFieldTasks);
 
 // Submit new field task
-fieldRouter.post('/', authenticateToken, upload.single('media'), createFieldTask);
+fieldRouter.post('/', authenticateToken, requireRole('LEARNER'), upload.single('media'), createFieldTask);
 
 // Get all my submitted field tasks
 

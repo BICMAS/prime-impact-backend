@@ -13,11 +13,20 @@ export const createAnnouncement = async (req, res) => {
         }
 
         const userId = req.user.id;
+        const userOrgId = req.user.orgId;
 
         if (!['SUPER_ADMIN', 'HR_MANAGER'].includes(req.user.userRole)) {
             return res.status(403).json({
                 success: false,
                 error: 'Only admins or HR can post announcements'
+            });
+        }
+
+        // Enforce org-scoped announcements.
+        if (!userOrgId) {
+            return res.status(400).json({
+                success: false,
+                error: 'User must belong to an organization to post announcements'
             });
         }
 
@@ -54,8 +63,23 @@ export const createAnnouncement = async (req, res) => {
 export const getAnnouncements = async (req, res) => {
     try {
         const { limit = 10, offset = 0 } = req.query;
+        const userOrgId = req.user.orgId;
+        const requestedOrgId = typeof req.query.orgId === 'string' ? req.query.orgId.trim() : null;
+        const effectiveOrgId = req.user.userRole === 'SUPER_ADMIN' && requestedOrgId
+            ? requestedOrgId
+            : userOrgId;
+
+        if (!effectiveOrgId) {
+            return res.status(400).json({
+                success: false,
+                error: 'User must belong to an organization to view announcements'
+            });
+        }
 
         const announcements = await prisma.announcement.findMany({
+            where: {
+                user: { orgId: effectiveOrgId }
+            },
             skip: parseInt(offset),
             take: parseInt(limit),
             orderBy: { createdAt: 'desc' },
@@ -69,12 +93,17 @@ export const getAnnouncements = async (req, res) => {
             }
         });
 
-        const total = await prisma.announcement.count();
+        const total = await prisma.announcement.count({
+            where: {
+                user: { orgId: effectiveOrgId }
+            }
+        });
 
         res.json({
             success: true,
             data: announcements,
             meta: {
+                orgId: effectiveOrgId,
                 total,
                 limit: parseInt(limit),
                 offset: parseInt(offset),

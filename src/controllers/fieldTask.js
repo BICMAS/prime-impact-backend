@@ -18,6 +18,11 @@ export const createFieldTask = async (req, res) => {
         }
 
         const userId = req.user.id;
+        const userOrgId = req.user.orgId;
+
+        if (!userOrgId) {
+            return res.status(400).json({ success: false, error: 'User must belong to an organization' });
+        }
 
         const blob = await put(file.originalname, file.buffer, {
             access: 'public',
@@ -52,9 +57,17 @@ export const createFieldTask = async (req, res) => {
 export const getMyFieldTasks = async (req, res) => {
     try {
         const userId = req.user.id;
+        const userOrgId = req.user.orgId;
+
+        if (!userOrgId) {
+            return res.status(400).json({ success: false, error: 'User must belong to an organization' });
+        }
 
         const tasks = await prisma.fieldTask.findMany({
-            where: { createdBy: userId },
+            where: {
+                createdBy: userId,
+                user: { orgId: userOrgId }
+            },
             orderBy: { createdAt: 'desc' },
             select: {
                 id: true,
@@ -77,32 +90,29 @@ export const getMyFieldTasks = async (req, res) => {
 // src/controllers/FieldTaskController.js
 export const getAllFieldTasks = async (req, res) => {
     try {
-        console.log('[DEBUG] getAllFieldTasks called by user:', req.user?.id, 'Role:', req.user?.userRole);
+        const userOrgId = req.user.orgId;
+        const requestedOrgId = typeof req.query.orgId === 'string' ? req.query.orgId.trim() : null;
+        const effectiveOrgId = req.user.userRole === 'SUPER_ADMIN' && requestedOrgId
+            ? requestedOrgId
+            : userOrgId;
 
-        // 1. Total count - no filters
-        const totalCount = await prisma.fieldTask.count();
-        console.log('[DEBUG] Total FieldTask records in DB:', totalCount);
+        if (!effectiveOrgId) {
+            return res.status(400).json({
+                success: false,
+                error: 'User must belong to an organization'
+            });
+        }
 
-        // 2. Sample records - no where clause
-        const sampleTasks = await prisma.fieldTask.findMany({
-            take: 10,
-            orderBy: { createdAt: 'desc' },
-            select: {
-                id: true,
-                moduleTitle: true,
-                description: true,
-                mediaUrl: true,
-                mediaType: true,
-                createdBy: true,
-                createdAt: true
-            }
-        });
-        console.log('[DEBUG] Sample FieldTask records:', JSON.stringify(sampleTasks, null, 2));
+        const { limit = 50, offset = 0 } = req.query;
+        const take = parseInt(limit, 10);
+        const skip = parseInt(offset, 10);
 
-        // 3. Actual query (what you normally use)
         const tasks = await prisma.fieldTask.findMany({
-            skip: 0,
-            take: 50,
+            where: {
+                user: { orgId: effectiveOrgId }
+            },
+            skip,
+            take,
             orderBy: { createdAt: 'desc' },
             include: {
                 user: {
@@ -116,19 +126,29 @@ export const getAllFieldTasks = async (req, res) => {
             }
         });
 
+        const total = await prisma.fieldTask.count({
+            where: {
+                user: { orgId: effectiveOrgId }
+            }
+        });
+
         res.json({
             success: true,
-            totalInDB: totalCount,
-            sampleRecords: sampleTasks,
-            data: tasks
+            data: tasks,
+            meta: {
+                orgId: effectiveOrgId,
+                total,
+                limit: take,
+                offset: skip,
+                pageCount: take > 0 ? Math.ceil(total / take) : 0
+            }
         });
 
     } catch (error) {
         console.error('[GET ALL FIELD TASKS ERROR]', error.message);
         res.status(500).json({
             success: false,
-            error: error.message,
-            stack: error.stack
+            error: error.message
         });
     }
 };
