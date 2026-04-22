@@ -76,13 +76,41 @@ export class ScormPackageModel {
         const scormCloudId = pkg.scormCloudId;
         if (!scormCloudId) throw new Error('No SCORM Cloud ID');
 
+        const getOrCreateCourseAttempt = async () => {
+            if (!options.courseId) return null;
+
+            return prisma.attempt.upsert({
+                where: {
+                    userId_courseId: {
+                        userId,
+                        courseId: options.courseId
+                    }
+                },
+                update: {
+                    scormPackageId: packageId,
+                    status: 'IN_PROGRESS',
+                    updatedAt: new Date()
+                },
+                create: {
+                    userId,
+                    courseId: options.courseId,
+                    scormPackageId: packageId,
+                    status: 'IN_PROGRESS',
+                    completionPercentage: 0,
+                    createdAt: new Date(),
+                    updatedAt: new Date()
+                },
+                select: { id: true }
+            });
+        };
+
         // 1. Find existing ScormAttempt (any record for this user + package)
         let scormAttempt = await prisma.scormAttempt.findFirst({
             where: {
                 userId,
                 scormPackageId: packageId
             },
-            select: { id: true, scormCloudRegistrationId: true }
+            select: { id: true, scormCloudRegistrationId: true, attemptId: true }
         });
 
         let registrationId = scormAttempt?.scormCloudRegistrationId;
@@ -131,15 +159,23 @@ export class ScormPackageModel {
                         data: { scormCloudRegistrationId: registrationId, updatedAt: new Date() }
                     });
                 }
+
+                if (!scormAttempt.attemptId) {
+                    const courseAttempt = await getOrCreateCourseAttempt();
+                    if (courseAttempt?.id) {
+                        await prisma.scormAttempt.update({
+                            where: { id: scormAttempt.id },
+                            data: { attemptId: courseAttempt.id, updatedAt: new Date() }
+                        });
+                        scormAttempt.attemptId = courseAttempt.id;
+                    }
+                }
             } else {
                 console.log('[LAUNCH] No existing registration → creating new');
                 await createFreshRegistrationAndLaunch();
 
-                // Create ScormAttempt and link to course Attempt if possible
-                const courseAttempt = await prisma.attempt.findFirst({
-                    where: { userId, courseId: options.courseId || null },
-                    select: { id: true }
-                });
+                // Create ScormAttempt and link to course Attempt if course context exists
+                const courseAttempt = await getOrCreateCourseAttempt();
 
                 scormAttempt = await prisma.scormAttempt.create({
                     data: {

@@ -1,5 +1,15 @@
 import { prisma } from '../utils/db.js';
 
+/** Course has no orgId; scope assignments by learner or group in the org. */
+function assignmentWhereForOrg(orgId) {
+    return {
+        OR: [
+            { assigneeUser: { orgId } },
+            { group: { orgId } }
+        ]
+    };
+}
+
 export class DashboardModel {
     static async getTotalLearners(orgId) {
         try {
@@ -32,9 +42,11 @@ export class DashboardModel {
             console.log('[DASHBOARD MODEL] getOverdueCourses for orgId:', orgId);
             return await prisma.assignment.count({
                 where: {
-                    course: { orgId },
-                    dueDate: { lt: new Date() },
-                    NOT: { attempts: { some: { status: 'COMPLETED' } } }
+                    AND: [
+                        assignmentWhereForOrg(orgId),
+                        { dueDate: { lt: new Date() } },
+                        { NOT: { attempts: { some: { status: 'COMPLETED' } } } }
+                    ]
                 }
             });
         } catch (error) {
@@ -48,9 +60,11 @@ export class DashboardModel {
             console.log('[DASHBOARD MODEL] getActiveAssignments for orgId:', orgId);
             return await prisma.assignment.count({
                 where: {
-                    course: { orgId },
-                    dueDate: { gte: new Date() },
-                    NOT: { attempts: { some: { status: 'COMPLETED' } } }
+                    AND: [
+                        assignmentWhereForOrg(orgId),
+                        { dueDate: { gte: new Date() } },
+                        { NOT: { attempts: { some: { status: 'COMPLETED' } } } }
+                    ]
                 }
             });
         } catch (error) {
@@ -70,20 +84,25 @@ export class DashboardModel {
                     id: true,
                     fullName: true,
                     email: true,
-                    attempts: {
+                    userAttempts: {
                         select: { completionPercentage: true },
                         where: { status: 'COMPLETED' }
                     }
-                },
-                orderBy: {
-                    attempts: { _avg: { completionPercentage: 'desc' } }
-                },
-                take: limit
+                }
             });
-            return users.map(u => ({
-                ...u,
-                avgCompletion: Math.round((u.attempts.reduce((sum, a) => sum + (a.completionPercentage || 0), 0) / Math.max(u.attempts.length, 1)) * 100) / 100
-            }));
+            const ranked = users
+                .map((u) => ({
+                    id: u.id,
+                    fullName: u.fullName,
+                    email: u.email,
+                    attempts: u.userAttempts,
+                    avgCompletion: Math.round(
+                        (u.userAttempts.reduce((sum, a) => sum + (a.completionPercentage || 0), 0) / Math.max(u.userAttempts.length, 1)) * 100
+                    ) / 100
+                }))
+                .sort((a, b) => b.avgCompletion - a.avgCompletion)
+                .slice(0, limit);
+            return ranked;
         } catch (error) {
             console.error('[DASHBOARD MODEL ERROR getTopPerformers]', error.message);
             return [];
@@ -94,15 +113,14 @@ export class DashboardModel {
         try {
             console.log('[DASHBOARD MODEL] getCompletionByDepartment for orgId:', orgId);
             const users = await prisma.user.findMany({
-                where: { orgId },
+                where: { orgId, userRole: 'LEARNER', status: 'ACTIVE' },
                 select: {
                     department: true,
-                    attempts: true
+                    userAttempts: true
                 }
             });
-            const activeLearners = users.filter((u) => u.department);
-            const grouped = activeLearners.reduce((acc, user) => {
-                const department = user.department;
+            const grouped = users.reduce((acc, user) => {
+                const department = user.department ?? 'UNASSIGNED';
                 if (!acc[department]) acc[department] = [];
                 acc[department].push(user);
                 return acc;
@@ -113,10 +131,10 @@ export class DashboardModel {
                 return {
                     department,
                     totalLearners: departmentUsers.length,
-                    completed: departmentUsers.filter((u) => u.attempts.some((a) => a.status === 'COMPLETED')).length,
-                    inProgress: departmentUsers.filter((u) => u.attempts.some((a) => a.status === 'IN_PROGRESS')).length,
-                    notStarted: departmentUsers.filter((u) => u.attempts.length === 0).length,
-                    overdue: departmentUsers.filter((u) => u.attempts.some((a) => a.dueDate && a.dueDate < now && a.status !== 'COMPLETED')).length
+                    completed: departmentUsers.filter((u) => u.userAttempts.some((a) => a.status === 'COMPLETED')).length,
+                    inProgress: departmentUsers.filter((u) => u.userAttempts.some((a) => a.status === 'IN_PROGRESS')).length,
+                    notStarted: departmentUsers.filter((u) => u.userAttempts.length === 0).length,
+                    overdue: departmentUsers.filter((u) => u.userAttempts.some((a) => a.dueDate && a.dueDate < now && a.status !== 'COMPLETED')).length
                 };
             });
         } catch (error) {
@@ -131,8 +149,23 @@ export class DashboardModel {
             const [completed, inProgress, notStarted, overdue] = await Promise.all([
                 prisma.certificate.count({ where: { user: { orgId } } }),
                 prisma.attempt.count({ where: { user: { orgId }, status: 'IN_PROGRESS' } }),
-                prisma.assignment.count({ where: { course: { orgId }, attempts: { none: {} } } }),
-                prisma.assignment.count({ where: { course: { orgId }, dueDate: { lt: new Date() }, attempts: { none: { status: 'COMPLETED' } } } })
+                prisma.assignment.count({
+                    where: {
+                        AND: [
+                            assignmentWhereForOrg(orgId),
+                            { attempts: { none: {} } }
+                        ]
+                    }
+                }),
+                prisma.assignment.count({
+                    where: {
+                        AND: [
+                            assignmentWhereForOrg(orgId),
+                            { dueDate: { lt: new Date() } },
+                            { attempts: { none: { status: 'COMPLETED' } } }
+                        ]
+                    }
+                })
             ]);
             return { completed, inProgress, notStarted, overdue };
         } catch (error) {

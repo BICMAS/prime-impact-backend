@@ -18,6 +18,11 @@ scormCallbackRouter.post('/', express.urlencoded({ extended: true }), async (req
             success_status
         } = req.body;
 
+        if (!registration_id || !learner_id) {
+            console.warn('[SCORM CALLBACK] Missing registration_id or learner_id');
+            return res.status(200).send('OK');
+        }
+
         // Find package by SCORM Cloud course ID
         const scormPackage = await prisma.scormPackage.findFirst({
             where: { scormCloudId: course_id }
@@ -40,28 +45,89 @@ scormCallbackRouter.post('/', express.urlencoded({ extended: true }), async (req
             }
         };
 
-        // Update or create attempt record
-        await prisma.attempt.upsert({
-            where: {
-                userId_courseId: {
+        const parsedScore = score ? parseFloat(score) : 0;
+        const parsedLearningHours = total_seconds ? parseFloat(total_seconds) / 3600 : null;
+        const mappedStatus = mapStatus(completion_status || success_status);
+        const completion = parsedScore * 100;
+
+        const scormAttempt = await prisma.scormAttempt.findUnique({
+            where: { scormCloudRegistrationId: registration_id },
+            include: { attempt: { select: { id: true } } }
+        });
+
+        let courseAttemptId = scormAttempt?.attemptId || null;
+
+        // If no link exists yet, use/seed a package-level Attempt so learner appears in attempts table.
+        if (!courseAttemptId) {
+            const packageAttempt = await prisma.attempt.upsert({
+                where: {
+                    userId_scormPackageId: {
+                        userId: learner_id,
+                        scormPackageId: scormPackage.id
+                    }
+                },
+                update: {
+                    status: mappedStatus,
+                    completionPercentage: completion,
+                    score: parsedScore,
+                    learningHours: parsedLearningHours,
+                    updatedAt: new Date()
+                },
+                create: {
                     userId: learner_id,
-                    courseId: scormPackage.id
+                    scormPackageId: scormPackage.id,
+                    status: mappedStatus,
+                    completionPercentage: completion,
+                    score: parsedScore,
+                    learningHours: parsedLearningHours
+                },
+                select: { id: true }
+            });
+            courseAttemptId = packageAttempt.id;
+        } else {
+            await prisma.attempt.update({
+                where: { id: courseAttemptId },
+                data: {
+                    status: mappedStatus,
+                    completionPercentage: completion,
+                    score: parsedScore,
+                    learningHours: parsedLearningHours,
+                    updatedAt: new Date()
+                }
+            });
+        }
+
+        await prisma.scormAttempt.upsert({
+            where: {
+                userId_scormPackageId: {
+                    userId: learner_id,
+                    scormPackageId: scormPackage.id
                 }
             },
             update: {
-                completionPercentage: score ? parseFloat(score) * 100 : 0,
-                status: mapStatus(completion_status || success_status),
-                score: score ? parseFloat(score) : 0,
-                learningHours: total_seconds ? parseFloat(total_seconds) / 3600 : null,
+                attemptId: courseAttemptId,
+                scormCloudRegistrationId: registration_id,
+                status: mappedStatus,
+                completionPercentage: completion,
+                score: parsedScore,
+                learningHours: parsedLearningHours,
+                scormCloudLastSyncAt: new Date(),
+                scormCloudCompletion: completion / 100,
+                scormCloudScoreScaled: parsedScore,
                 updatedAt: new Date()
             },
             create: {
                 userId: learner_id,
-                courseId: scormPackage.id,
-                completionPercentage: score ? parseFloat(score) * 100 : 0,
-                status: mapStatus(completion_status || success_status),
-                score: score ? parseFloat(score) : 0,
-                learningHours: total_seconds ? parseFloat(total_seconds) / 3600 : null
+                scormPackageId: scormPackage.id,
+                attemptId: courseAttemptId,
+                scormCloudRegistrationId: registration_id,
+                status: mappedStatus,
+                completionPercentage: completion,
+                score: parsedScore,
+                learningHours: parsedLearningHours,
+                scormCloudLastSyncAt: new Date(),
+                scormCloudCompletion: completion / 100,
+                scormCloudScoreScaled: parsedScore
             }
         });
 

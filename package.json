@@ -10,7 +10,9 @@
     "start": "node src/app.js",
     "dev": "nodemon --watch src --ignore uploads --ignore uploads/** app.js",
     "watch": "babel src --out-dir dist --watch",
-    "seed": "node src/prisma/seed.js"
+    "seed": "node src/prisma/seed.js",
+    "backfill:attempts:dry": "node src/scripts/backfillAttemptsFromScorm.js",
+    "backfill:attempts:apply": "node src/scripts/backfillAttemptsFromScorm.js --apply"
   },
   "keywords": [],
   "author": "",
