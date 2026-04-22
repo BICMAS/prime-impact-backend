@@ -46,7 +46,7 @@ export const getLearnerCourseTracking = async (req, res) => {
 
 export const getAllLearnersCourseTracking = async (req, res) => {
     try {
-        const result = await HRCourseTrackingService.getAllLearnersCourseTracking(req.user);
+        const result = await HRCourseTrackingService.getAllLearnersCourseTracking(req.user, req.query);
         return res.json(result);
     } catch (error) {
         const status = error.message === 'HR must be in an organization' ? 403 : 403;

@@ -56,7 +56,7 @@ export class UserModel {
         console.log(`[MODEL] Finding learners by orgId: ${orgId}`);
         return prisma.user.findMany({
             where: { orgId, userRole: 'LEARNER' },
-            select: { id: true, fullName: true, email: true, userRole: true, status: true, orgId: true }
+            select: { id: true, fullName: true, email: true, userRole: true, status: true, orgId: true, department: true }
         });
     }
 

@@ -85,6 +85,64 @@ export class LearnerDashboardService {
 }
 
 export class HRCourseTrackingService {
+    static normalizeQueryFilters(query = {}) {
+        const search = typeof query.search === 'string' ? query.search.trim() : '';
+        const department = typeof query.department === 'string' ? query.department.trim() : '';
+        const status = typeof query.status === 'string' ? query.status.trim().toUpperCase() : '';
+        const sortBy = typeof query.sortBy === 'string' ? query.sortBy.trim() : 'name';
+        const sortOrder = typeof query.sortOrder === 'string' ? query.sortOrder.trim().toLowerCase() : 'asc';
+        const limit = Math.min(Math.max(parseInt(query.limit, 10) || 20, 1), 100);
+        const offset = Math.max(parseInt(query.offset, 10) || 0, 0);
+
+        return { search, department, status, sortBy, sortOrder, limit, offset };
+    }
+
+    static getProgressStatus({ attempts = [], stats = {} }) {
+        if (!attempts.length) return 'NOT_STARTED';
+        if ((stats.overdueCourses || 0) > 0) return 'OVERDUE';
+        if ((stats.inProgressCourses || 0) > 0) return 'IN_PROGRESS';
+        if ((stats.completedCourses || 0) > 0) return 'COMPLETED';
+        return 'NOT_STARTED';
+    }
+
+    static matchesStatusFilter(item, statusFilter) {
+        if (!statusFilter || statusFilter === 'ALL') return true;
+
+        // Support filtering by user account status.
+        if (['ACTIVE', 'INACTIVE', 'BLOCKED', 'DEACTIVATED'].includes(statusFilter)) {
+            return item.learner?.status === statusFilter;
+        }
+
+        // Support filtering by learning progress status.
+        const progressStatus = HRCourseTrackingService.getProgressStatus(item);
+        return progressStatus === statusFilter;
+    }
+
+    static sortTrackingItems(items = [], sortBy = 'name', sortOrder = 'asc') {
+        const direction = sortOrder === 'desc' ? -1 : 1;
+        const normalizedSortBy = ['lastActiveAt', 'avgCompletion', 'name'].includes(sortBy) ? sortBy : 'name';
+
+        return [...items].sort((a, b) => {
+            if (normalizedSortBy === 'avgCompletion') {
+                const av = Number(a?.stats?.avgCompletion || 0);
+                const bv = Number(b?.stats?.avgCompletion || 0);
+                return (av - bv) * direction;
+            }
+
+            if (normalizedSortBy === 'lastActiveAt') {
+                const av = a?.stats?.lastActiveAt ? new Date(a.stats.lastActiveAt).getTime() : 0;
+                const bv = b?.stats?.lastActiveAt ? new Date(b.stats.lastActiveAt).getTime() : 0;
+                return (av - bv) * direction;
+            }
+
+            const an = String(a?.learner?.fullName || '').toLowerCase();
+            const bn = String(b?.learner?.fullName || '').toLowerCase();
+            if (an < bn) return -1 * direction;
+            if (an > bn) return 1 * direction;
+            return 0;
+        });
+    }
+
     static buildLearnerStats(attempts = [], unfinishedCourses = []) {
         const assignedCourses = unfinishedCourses.length;
         const completedAttempts = attempts.filter((a) => a.status === 'COMPLETED');
@@ -149,12 +207,20 @@ export class HRCourseTrackingService {
         };
     }
 
-    static async getAllLearnersCourseTracking({ orgId }) {
+    static async getAllLearnersCourseTracking({ orgId }, query = {}) {
         if (!orgId) throw new Error('HR must be in an organization');
+        const { search, department, status, sortBy, sortOrder, limit, offset } = HRCourseTrackingService.normalizeQueryFilters(query);
 
         const learners = await UserModel.findLearnersByOrgId(orgId);
         if (!learners || learners.length === 0) {
-            return { learners: [], count: 0 };
+            return {
+                learners: [],
+                count: 0,
+                users: [],
+                courses: [],
+                progress: [],
+                meta: { total: 0, limit, offset, pageCount: 0, filters: { search, department, status, sortBy, sortOrder } }
+            };
         }
 
         const tracking = await Promise.all(
@@ -163,17 +229,72 @@ export class HRCourseTrackingService {
                 const currentCourse = await DashboardModel.getCurrentCourse(learner.id);
                 const unfinishedCourses = await DashboardModel.getUnfinishedCourses(learner.id);
                 const stats = HRCourseTrackingService.buildLearnerStats(attempts, unfinishedCourses);
+                const progressStatus = HRCourseTrackingService.getProgressStatus({ attempts, stats });
 
                 return {
                     learner,
                     attempts,
                     currentCourse,
                     unfinishedCourses,
-                    stats
+                    stats,
+                    progressStatus
                 };
             })
         );
+        const filtered = tracking
+            .filter((item) => {
+                if (!department || department.toUpperCase() === 'ALL') return true;
+                return String(item.learner.department || 'UNASSIGNED').toUpperCase() === department.toUpperCase();
+            })
+            .filter((item) => {
+                if (!search) return true;
+                const needle = search.toLowerCase();
+                return item.learner.fullName?.toLowerCase().includes(needle) || item.learner.email?.toLowerCase().includes(needle);
+            })
+            .filter((item) => HRCourseTrackingService.matchesStatusFilter(item, status));
 
-        return { learners: tracking, count: tracking.length };
+        const sorted = HRCourseTrackingService.sortTrackingItems(filtered, sortBy, sortOrder);
+        const total = sorted.length;
+        const paginated = sorted.slice(offset, offset + limit);
+
+        const users = paginated.map((item) => item.learner);
+        const courseMap = new Map();
+        const progress = [];
+
+        paginated.forEach((item) => {
+            (item.attempts || []).forEach((attempt) => {
+                if (attempt?.course?.id && !courseMap.has(attempt.course.id)) {
+                    courseMap.set(attempt.course.id, attempt.course);
+                }
+                progress.push({
+                    learnerId: item.learner.id,
+                    learnerName: item.learner.fullName,
+                    learnerEmail: item.learner.email,
+                    learnerDepartment: item.learner.department || 'UNASSIGNED',
+                    courseId: attempt.courseId || null,
+                    courseTitle: attempt.course?.title || null,
+                    status: attempt.status,
+                    completionPercentage: attempt.completionPercentage || 0,
+                    score: attempt.score ?? null,
+                    dueDate: attempt.dueDate || null,
+                    syncedAt: attempt.updatedAt || null
+                });
+            });
+        });
+
+        return {
+            learners: paginated,
+            count: paginated.length,
+            users,
+            courses: Array.from(courseMap.values()),
+            progress,
+            meta: {
+                total,
+                limit,
+                offset,
+                pageCount: Math.ceil(total / limit),
+                filters: { search, department, status, sortBy, sortOrder }
+            }
+        };
     }
 }
