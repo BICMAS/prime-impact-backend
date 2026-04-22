@@ -146,7 +146,8 @@ export class DashboardModel {
     static async getCourseStatus(orgId) {
         try {
             console.log('[DASHBOARD MODEL] getCourseStatus for orgId:', orgId);
-            const [completed, inProgress, notStarted, overdue] = await Promise.all([
+            const [completedAttempts, completedCertificates, inProgress, notStarted, overdue] = await Promise.all([
+                prisma.attempt.count({ where: { user: { orgId }, status: 'COMPLETED' } }),
                 prisma.certificate.count({ where: { user: { orgId } } }),
                 prisma.attempt.count({ where: { user: { orgId }, status: 'IN_PROGRESS' } }),
                 prisma.assignment.count({
@@ -167,6 +168,7 @@ export class DashboardModel {
                     }
                 })
             ]);
+            const completed = completedAttempts > 0 ? completedAttempts : completedCertificates;
             return { completed, inProgress, notStarted, overdue };
         } catch (error) {
             console.error('[DASHBOARD MODEL ERROR getCourseStatus]', error.message);
