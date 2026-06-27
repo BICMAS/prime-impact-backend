@@ -33,46 +33,68 @@ export class ScormCloudService {
         return this.client;
     }
 
+    /**
+     * Submit a SCORM package to SCORM Cloud's import queue.
+     *
+     * The file is streamed (not buffered into memory) to avoid OOM crashes on
+     * memory-constrained hosts, and this resolves as soon as the import job is
+     * accepted — it does NOT wait for the import to finish. Use
+     * `waitForImportJob` separately (e.g. in the background) to confirm.
+     */
+    static async submitCourseUpload(filePath, filename, lessonId = null) {
+        console.log(`[UPLOAD] Submitting: ${filename} (lesson: ${lessonId || 'none'})`);
+
+        if (!fs.existsSync(filePath)) throw new Error(`File missing: ${filePath}`);
+        const stats = fs.statSync(filePath);
+        if (stats.size === 0) throw new Error('File empty');
+
+        const courseId = lessonId ? `lesson-${lessonId}` : `pkg-${uuidv4().replace(/-/g, '')}`;
+
+        const FormData = (await import('form-data')).default;
+        const form = new FormData();
+        // Stream the file instead of reading it fully into memory. `knownLength`
+        // lets form-data set Content-Length so SCORM Cloud accepts the body.
+        form.append('file', fs.createReadStream(filePath), {
+            filename,
+            contentType: 'application/zip',
+            knownLength: stats.size,
+        });
+        form.append('mayCreateNewVersion', 'true');
+
+        const client = this.init();
+        const endpoint = `/courses/importJobs/upload?courseId=${encodeURIComponent(courseId)}`;
+
+        console.log(`[UPLOAD] POST to: ${endpoint}`);
+        const res = await client.post(endpoint, form, {
+            headers: form.getHeaders(),
+            maxContentLength: Infinity,
+            maxBodyLength: Infinity,
+        });
+
+        console.log('[UPLOAD] Status:', res.status);
+        console.log('[UPLOAD] Data:', JSON.stringify(res.data, null, 2));
+
+        let jobId;
+        if (res.data.id) {
+            jobId = res.data.id;
+        } else if (res.data.result) {
+            if (res.data.result.includes(courseId)) {
+                jobId = res.data.result.replace(courseId, '');
+            } else {
+                jobId = res.data.result.substring(0, 10);
+            }
+        }
+
+        if (!jobId) throw new Error('No jobId extracted from SCORM Cloud upload response');
+
+        console.log(`[UPLOAD] Job ID: ${jobId}`);
+
+        return { jobId, courseId };
+    }
+
     static async uploadCourse(filePath, filename, lessonId = null) {
         try {
-            console.log(`[UPLOAD] Starting: ${filename} (lesson: ${lessonId || 'none'})`);
-
-            if (!fs.existsSync(filePath)) throw new Error(`File missing: ${filePath}`);
-            const stats = fs.statSync(filePath);
-            if (stats.size === 0) throw new Error('File empty');
-
-            const fileBuffer = fs.readFileSync(filePath);
-            const courseId = lessonId ? `lesson-${lessonId}` : `pkg-${uuidv4().replace(/-/g, '')}`;
-
-            const FormData = (await import('form-data')).default;
-            const form = new FormData();
-            form.append('file', fileBuffer, { filename, contentType: 'application/zip' });
-            form.append('mayCreateNewVersion', 'true');
-
-            const client = this.init();
-            const endpoint = `/courses/importJobs/upload?courseId=${encodeURIComponent(courseId)}`;
-
-            console.log(`[UPLOAD] POST to: ${endpoint}`);
-            const res = await client.post(endpoint, form, { headers: form.getHeaders() });
-
-            console.log('[UPLOAD] Status:', res.status);
-            console.log('[UPLOAD] Data:', JSON.stringify(res.data, null, 2));
-
-            let jobId;
-            if (res.data.id) {
-                jobId = res.data.id;
-            } else if (res.data.result) {
-                if (res.data.result.includes(courseId)) {
-                    jobId = res.data.result.replace(courseId, '');
-                } else {
-                    jobId = res.data.result.substring(0, 10);
-                }
-            }
-
-            if (!jobId) throw new Error('No jobId extracted');
-
-            console.log(`[UPLOAD] Job ID: ${jobId}`);
-
+            const { jobId, courseId } = await this.submitCourseUpload(filePath, filename, lessonId);
             return await this.waitForImportJob(jobId, courseId, filename);
         } catch (err) {
             console.error('[UPLOAD ERROR]', err.message, err.response?.data);

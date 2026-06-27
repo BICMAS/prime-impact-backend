@@ -30,14 +30,21 @@ export class ScormPackageModel {
     static async uploadAndExtract(filePath, filename, uploadedBy, lessonId = null) {
         console.log('[MODEL] Uploading to SCORM Cloud', { filename, lessonId });
 
-        const result = await ScormCloudService.uploadCourse(filePath, filename, lessonId);
+        // 1. Submit the file to SCORM Cloud's import queue. This streams the file
+        //    and returns as soon as the job is accepted — it does NOT block for the
+        //    (potentially ~30 min) import. The generated courseId is also the
+        //    scormCloudId, so we already have everything we need to launch later.
+        const packageSize = fs.existsSync(filePath) ? fs.statSync(filePath).size : 0;
+        const { jobId, courseId } = await ScormCloudService.submitCourseUpload(filePath, filename, lessonId);
 
+        // 2. Persist the package immediately and respond fast so Railway's proxy
+        //    never times out (which is what produced the 502 / CORS errors).
         const pkg = await prisma.scormPackage.create({
             data: {
                 filename,
-                storagePath: `scormcloud://${result.scormCloudId}`,
+                storagePath: `scormcloud://${courseId}`,
                 manifestJson: {},
-                scormVersion: result.scormVersion.includes('2004') || result.scormVersion.includes('4th') ? 'V2004' : 'V1_2',
+                scormVersion: 'V2004', // sensible default; corrected once import finishes
                 encrypted: false,
                 checksum: `cloud-${Date.now()}`,
                 launchFile: null,
@@ -45,19 +52,56 @@ export class ScormPackageModel {
                 uploadedAt: new Date(),
                 blobs: [],
                 fileCount: 0,
-                packageSize: 0,
-                scormCloudId: result.scormCloudId,
+                packageSize,
+                scormCloudId: courseId,
             },
             include: { uploader: { select: { id: true, fullName: true, email: true } } },
         });
 
+        // 3. SCORM Cloud now owns the file; remove the local temp copy.
         if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+
+        // 4. Confirm the import in the background: fix the SCORM version on success,
+        //    or remove the orphaned record on failure so admins can retry.
+        void this.finalizeImportInBackground(jobId, courseId, filename, pkg.id);
 
         return {
             ...pkg,
-            scormCloudCourseId: result.scormCloudId,
-            title: result.title,
+            scormCloudCourseId: courseId,
+            status: 'PROCESSING',
         };
+    }
+
+    /**
+     * Polls SCORM Cloud until the import job for a freshly uploaded package
+     * completes. Runs detached from the HTTP request so the upload response is
+     * fast. Updates the stored SCORM version on success and deletes the package
+     * record if the import ultimately fails.
+     */
+    static async finalizeImportInBackground(jobId, courseId, filename, packageId) {
+        try {
+            const result = await ScormCloudService.waitForImportJob(jobId, courseId, filename);
+
+            const scormVersion = (result.scormVersion?.includes('2004') || result.scormVersion?.includes('4th'))
+                ? 'V2004'
+                : 'V1_2';
+
+            await prisma.scormPackage.update({
+                where: { id: packageId },
+                data: { scormVersion },
+            });
+
+            console.log(`[SCORM IMPORT FINALIZE] Course ${courseId} ready (${result.title})`);
+        } catch (err) {
+            console.error(`[SCORM IMPORT FINALIZE] Import failed for course ${courseId}:`, err.message);
+
+            try {
+                await prisma.scormPackage.delete({ where: { id: packageId } });
+                console.log(`[SCORM IMPORT FINALIZE] Removed orphaned package ${packageId}`);
+            } catch (cleanupErr) {
+                console.error('[SCORM IMPORT FINALIZE] Cleanup delete failed:', cleanupErr.message);
+            }
+        }
     }
 
     static async findById(id) {
