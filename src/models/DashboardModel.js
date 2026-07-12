@@ -211,12 +211,14 @@ export class DashboardModel {
         return avgResult._avg.completionPercentage || 0;
     }
 
-    // static async getAverageSession() {
-    //     const avgResult = await prisma.attempt.aggregate({
-    //         _avg: { sessionDuration: true }  // Assume Attempt has sessionDuration in minutes
-    //     });
-    //     return Math.round(avgResult._avg.sessionDuration || 0);
-    // }
+    static async getAverageSession() {
+        const avgResult = await prisma.attempt.aggregate({
+            where: { learningHours: { not: null, gt: 0 } },
+            _avg: { learningHours: true },
+        });
+        const avgHours = avgResult._avg.learningHours || 0;
+        return Math.round(avgHours * 60);
+    }
 
     static async getSystemLoad() {
         return prisma.attempt.count({

@@ -1,5 +1,7 @@
 // src/controllers/ScormController.js
+import fs from 'fs';
 import { ScormService } from '../service/ScormService.js';
+import { AttemptService } from '../service/AttemptService.js';
 import { prisma } from '../utils/db.js';
 import { ScormCloudService } from '../services/ScormCloudService.js';
 
@@ -311,7 +313,7 @@ export const syncAndGetUserScormProgress = async (req, res) => {
         const syncedAttempts = await Promise.all(
             attempts.map(async (attempt) => {
                 try {
-                    return await AttemptService.syncScormProgress(attempt.id);
+                    return await AttemptService.syncScormProgress(attempt.id, req.user);
                 } catch (err) {
                     console.warn(`Sync failed for attempt ${attempt.id}:`, err.message);
                     return attempt; // fallback to last known state
@@ -339,6 +341,3 @@ export const syncAndGetUserScormProgress = async (req, res) => {
         res.status(500).json({ success: false, error: error.message });
     }
 };
-
-// Helper for file cleanup (if needed)
-import fs from 'fs';

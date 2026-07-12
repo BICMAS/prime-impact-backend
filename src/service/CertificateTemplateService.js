@@ -4,19 +4,41 @@ import { CourseModel } from '../models/CourseModel.js';
 import { UserModel } from '../models/UserModel.js';
 import { AssignmentModel } from '../models/AssignmentModel.js';
 import { AttemptModel } from '../models/AttemptModel.js';
-import { CertificatePdfService } from './CertificatePdfService.js';
+import { CertificatePdfService, serializeTemplateMetadata } from './CertificatePdfService.js';
+import { StorageService } from '../services/StorageService.js';
+
+const ALLOWED_LOGO_MIME_TYPES = new Set([
+    'image/png',
+    'image/jpeg',
+    'image/jpg',
+    'image/webp',
+]);
 
 export class CertificateTemplateService {
-    static async uploadTemplate(filePath, filename, description, uploadedBy) {
+    static async uploadTemplate(filePath, filename, mimeType, description, themeConfig, uploadedBy) {
         if (!uploadedBy) throw new Error('Uploader ID required');
         if (!filename) throw new Error('Filename required');
-        if (!filename.endsWith('.pdf')) {  // FIXED: PDF only
-            throw new Error('Only PDF templates allowed');
+
+        const normalizedMime = String(mimeType || '').toLowerCase();
+        const lowerName = filename.toLowerCase();
+        const isAllowedMime = ALLOWED_LOGO_MIME_TYPES.has(normalizedMime);
+        const isAllowedExt = ['.png', '.jpg', '.jpeg', '.webp'].some((ext) =>
+            lowerName.endsWith(ext)
+        );
+
+        if (!isAllowedMime && !isAllowedExt) {
+            throw new Error('Only PNG, JPG, or WEBP logo files are allowed');
         }
 
-        const mimeType = 'application/pdf';
+        const metadata = serializeTemplateMetadata(description, themeConfig);
 
-        const result = await CertificateTemplateModel.uploadAndSave(filePath, filename, mimeType, description, uploadedBy);
+        const result = await CertificateTemplateModel.uploadAndSave(
+            filePath,
+            filename,
+            mimeType,
+            metadata,
+            uploadedBy
+        );
         return result;
     }
 
@@ -56,7 +78,13 @@ export class CertificateTemplateService {
         }
 
         await CertificateModel.assignTemplateToCourse({ courseId, templateId, actorId });
-        return { courseId, templateId };
+
+        const reissueResult = await CertificateTemplateService.reissueCertificatesForCourse(
+            courseId,
+            actorId,
+        );
+
+        return { courseId, templateId, ...reissueResult };
     }
 
     static async assignTemplateToHRManager({ templateId, orgId, hrManagerId, actorId }) {
@@ -76,7 +104,13 @@ export class CertificateTemplateService {
         if (hrManager.orgId !== orgId) throw new Error('HR manager does not belong to the provided organization');
 
         await CertificateModel.assignTemplateToOrgHR({ orgId, hrManagerId, templateId, actorId });
-        return { templateId, orgId, hrManagerId };
+
+        const reissueResult = await CertificateTemplateService.reissueCertificatesForOrg(
+            orgId,
+            actorId,
+        );
+
+        return { templateId, orgId, hrManagerId, ...reissueResult };
     }
 
     static async getAssignedTemplateForHRManager(hrManagerId, orgId) {
@@ -116,6 +150,186 @@ export class CertificateTemplateService {
         };
     }
 
+    static async formatCertificateForClient(certificate) {
+        if (!certificate) return null;
+
+        const certificateUrl = await StorageService.resolveStorageUrl(certificate.pdfPath);
+
+        return {
+            ...certificate,
+            certificateUrl,
+            pdfPath: certificateUrl || certificate.pdfPath,
+        };
+    }
+
+    static async resolveTemplateIdForIssuance({ courseId, templateId, user }) {
+        if (templateId) return templateId;
+
+        const courseTemplateId = await CertificateModel.getAssignedTemplateForCourse(courseId);
+        if (courseTemplateId) return courseTemplateId;
+
+        if (user?.orgId) {
+            const orgTemplateId = await CertificateModel.getAssignedTemplateForOrg(user.orgId);
+            if (orgTemplateId) return orgTemplateId;
+        }
+
+        return null;
+    }
+
+    static async reissueCertificate({ certificate, user, course, templateId, issuerId }) {
+        if (!certificate) throw new Error('Certificate not found');
+        if (!user) throw new Error('User not found');
+        if (!course) throw new Error('Course not found');
+
+        const resolvedTemplateId = templateId ?? await CertificateTemplateService.resolveTemplateIdForIssuance({
+            courseId: course.id,
+            user,
+        });
+        if (!resolvedTemplateId) {
+            throw new Error('No certificate template assigned to this course or organization');
+        }
+
+        const template = await CertificateTemplateModel.findById(resolvedTemplateId);
+        if (!template) throw new Error('Certificate template not found');
+
+        const generatedPdf = await CertificatePdfService.generateAndUpload({
+            template,
+            traineeName: user.fullName,
+            courseTitle: course.title,
+            issuedAt: certificate.issuedAt || new Date(),
+        });
+
+        const updated = await CertificateModel.updateCertificate(certificate.id, {
+            templateId: resolvedTemplateId,
+            pdfPath: generatedPdf.blobUrl,
+        });
+
+        return {
+            ...(await CertificateTemplateService.formatCertificateForClient(updated)),
+            issuedBy: issuerId,
+        };
+    }
+
+    static async ensureCertificateCurrent({ learnerId, courseId, issuerId }) {
+        const existing = await CertificateModel.findCertificateByUserAndCourse(learnerId, courseId);
+        if (!existing) {
+            return { certificate: null, reissued: false };
+        }
+
+        const [user, course] = await Promise.all([
+            UserModel.findById(learnerId),
+            CourseModel.findById(courseId),
+        ]);
+        if (!user) throw new Error('User not found');
+        if (!course) throw new Error('Course not found');
+
+        const resolvedTemplateId = await CertificateTemplateService.resolveTemplateIdForIssuance({
+            courseId,
+            user,
+        });
+        if (!resolvedTemplateId) {
+            return {
+                certificate: await CertificateTemplateService.formatCertificateForClient(existing),
+                reissued: false,
+            };
+        }
+
+        if (existing.templateId === resolvedTemplateId) {
+            return {
+                certificate: await CertificateTemplateService.formatCertificateForClient(existing),
+                reissued: false,
+            };
+        }
+
+        const reissued = await CertificateTemplateService.reissueCertificate({
+            certificate: existing,
+            user,
+            course,
+            templateId: resolvedTemplateId,
+            issuerId,
+        });
+
+        return { certificate: reissued, reissued: true };
+    }
+
+    static async reissueCertificatesForOrg(orgId, actorId) {
+        if (!orgId) throw new Error('Organization ID required');
+
+        const certificates = await CertificateModel.findCertificatesByOrgId(orgId);
+        let reissuedCount = 0;
+        const errors = [];
+
+        for (const certificate of certificates) {
+            try {
+                const resolvedTemplateId = await CertificateTemplateService.resolveTemplateIdForIssuance({
+                    courseId: certificate.courseId,
+                    user: certificate.user,
+                });
+
+                if (!resolvedTemplateId || certificate.templateId === resolvedTemplateId) {
+                    continue;
+                }
+
+                await CertificateTemplateService.reissueCertificate({
+                    certificate,
+                    user: certificate.user,
+                    course: certificate.course,
+                    templateId: resolvedTemplateId,
+                    issuerId: actorId,
+                });
+                reissuedCount += 1;
+            } catch (error) {
+                errors.push({
+                    certificateId: certificate.id,
+                    userId: certificate.userId,
+                    courseId: certificate.courseId,
+                    error: error.message,
+                });
+            }
+        }
+
+        return { reissuedCount, errors };
+    }
+
+    static async reissueCertificatesForCourse(courseId, actorId) {
+        if (!courseId) throw new Error('Course ID required');
+
+        const certificates = await CertificateModel.findCertificatesByCourseId(courseId);
+        let reissuedCount = 0;
+        const errors = [];
+
+        for (const certificate of certificates) {
+            try {
+                const resolvedTemplateId = await CertificateTemplateService.resolveTemplateIdForIssuance({
+                    courseId,
+                    user: certificate.user,
+                });
+
+                if (!resolvedTemplateId || certificate.templateId === resolvedTemplateId) {
+                    continue;
+                }
+
+                await CertificateTemplateService.reissueCertificate({
+                    certificate,
+                    user: certificate.user,
+                    course: certificate.course,
+                    templateId: resolvedTemplateId,
+                    issuerId: actorId,
+                });
+                reissuedCount += 1;
+            } catch (error) {
+                errors.push({
+                    certificateId: certificate.id,
+                    userId: certificate.userId,
+                    courseId: certificate.courseId,
+                    error: error.message,
+                });
+            }
+        }
+
+        return { reissuedCount, errors };
+    }
+
     static async issueCertificate({ userId, courseId, issuerId, templateId, requester }) {
         if (!userId) throw new Error('User ID required');
         if (!courseId) throw new Error('Course ID required');
@@ -134,10 +348,13 @@ export class CertificateTemplateService {
             }
         }
 
-        const assignedTemplateId = await CertificateModel.getAssignedTemplateForCourse(courseId);
-        const resolvedTemplateId = templateId || assignedTemplateId;
+        const resolvedTemplateId = await CertificateTemplateService.resolveTemplateIdForIssuance({
+            courseId,
+            templateId,
+            user,
+        });
         if (!resolvedTemplateId) {
-            throw new Error('No template assigned to course');
+            throw new Error('No certificate template assigned to this course or organization');
         }
 
         const template = await CertificateTemplateModel.findById(resolvedTemplateId);
@@ -148,7 +365,7 @@ export class CertificateTemplateService {
 
         const issuedAt = new Date();
         const generatedPdf = await CertificatePdfService.generateAndUpload({
-            templateUrl: template.blobUrl,
+            template,
             traineeName: user.fullName,
             courseTitle: course.title,
             issuedAt
@@ -162,7 +379,10 @@ export class CertificateTemplateService {
             issuedAt
         });
 
-        return { ...certificate, issuedBy: issuerId };
+        return {
+            ...(await CertificateTemplateService.formatCertificateForClient(certificate)),
+            issuedBy: issuerId,
+        };
     }
 
     static async claimLearnerCertificate(learnerId, courseId) {
@@ -182,7 +402,17 @@ export class CertificateTemplateService {
 
         const existing = await CertificateModel.findCertificateByUserAndCourse(learnerId, courseId);
         if (existing) {
-            return { certificate: existing, issued: false };
+            const current = await CertificateTemplateService.ensureCertificateCurrent({
+                learnerId,
+                courseId,
+                issuerId: learnerId,
+            });
+
+            return {
+                certificate: current.certificate,
+                issued: false,
+                reissued: current.reissued,
+            };
         }
 
         const created = await this.issueCertificate({
@@ -192,6 +422,27 @@ export class CertificateTemplateService {
             requester: { userRole: 'LEARNER' }
         });
 
-        return { certificate: created, issued: true };
+        return { certificate: created, issued: true, reissued: false };
+    }
+
+    static async downloadLearnerCertificate(learnerId, courseId) {
+        const claimResult = await this.claimLearnerCertificate(learnerId, courseId);
+        const storedCertificate = await CertificateModel.findCertificateByUserAndCourse(
+            learnerId,
+            courseId,
+        );
+
+        if (!storedCertificate?.pdfPath) {
+            throw new Error('Certificate file not found');
+        }
+
+        const fileBuffer = await StorageService.getObjectBuffer(storedCertificate.pdfPath);
+
+        return {
+            fileBuffer,
+            filename: `certificate-${courseId}.pdf`,
+            certificate: claimResult.certificate,
+            issued: claimResult.issued,
+        };
     }
 }

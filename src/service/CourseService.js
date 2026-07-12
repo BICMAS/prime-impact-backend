@@ -1,5 +1,14 @@
 import { CourseModel } from '../models/CourseModel.js';
 import { ModuleModel } from '../models/ModuleModel.js';
+import { StorageService } from '../services/StorageService.js';
+
+async function withResolvedImageUrl(course) {
+    if (!course?.imageUrl) return course;
+    return {
+        ...course,
+        imageUrl: await StorageService.resolveStorageUrl(course.imageUrl),
+    };
+}
 
 export class CourseService {
     static async createDraft(data, creatorId) {
@@ -15,10 +24,13 @@ export class CourseService {
         return await CourseModel.create(courseData);
     }
 
-    static async updateCourse(id, data) {
+    static async updateCourse(id, data, requester) {
         const course = await CourseModel.findById(id);
         if (!course) throw new Error('Course not found');
 
+        if (course.createdBy !== requester.id && requester.userRole !== 'SUPER_ADMIN') {
+            throw new Error('Only creator or super admin can update');
+        }
 
         if (data.modules !== undefined) {
             if (!Array.isArray(data.modules)) {
@@ -63,21 +75,26 @@ export class CourseService {
         return await CourseModel.updateNested(id, updateData);
     }
 
-    static async publishCourse(id, data) {
+    static async publishCourse(id, data, requester) {
         const course = await CourseModel.findById(id);
         if (!course) throw new Error('Course not found');
+        if (course.createdBy !== requester.id && requester.userRole !== 'SUPER_ADMIN') {
+            throw new Error('Only creator or super admin can publish');
+        }
         if (!data.modules || data.modules.length === 0) throw new Error('Course must have at least one module');
 
         return await CourseModel.publish(id);
     }
 
     static async getCourses() {
-        return await CourseModel.findMany();
+        const courses = await CourseModel.findMany();
+        return Promise.all(courses.map(withResolvedImageUrl));
     }
+
     static async getCourseById(id) {
         const course = await CourseModel.findById(id);
         if (!course) throw new Error('Course not found');
-        return course;
+        return withResolvedImageUrl(course);
     }
 
     static async deleteCourse(id, requester) {

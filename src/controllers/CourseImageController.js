@@ -1,10 +1,10 @@
-import { put } from '@vercel/blob';
+import { StorageService } from '../services/StorageService.js';
 import { prisma } from '../utils/db.js';
 
 export const addCourseImage = async (req, res) => {
     try {
         const { courseId } = req.params;
-        const file = req.file; // from multer
+        const file = req.file;
 
         if (!courseId) {
             return res.status(400).json({
@@ -22,7 +22,6 @@ export const addCourseImage = async (req, res) => {
 
         const userId = req.user.id;
 
-        // Optional: Check permissions (e.g., admin or course creator)
         const course = await prisma.course.findUnique({
             where: { id: courseId },
             select: { createdBy: true }
@@ -47,7 +46,6 @@ export const addCourseImage = async (req, res) => {
             });
         }
 
-        // Validate file type (images only)
         const allowedTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
         if (!allowedTypes.includes(file.mimetype)) {
             return res.status(400).json({
@@ -56,20 +54,12 @@ export const addCourseImage = async (req, res) => {
             });
         }
 
-        // Upload to Vercel Blob
-        const blob = await put(file.originalname, file.buffer, {
-            access: 'public',
-            token: process.env.BLOB_READ_WRITE_TOKEN,
-            addRandomSuffix: true,
-            contentType: file.mimetype
-        });
+        const objectKey = StorageService.buildObjectKey(`courses/${courseId}`, file.originalname);
+        await StorageService.uploadBuffer(objectKey, file.buffer, file.mimetype);
 
-        // Update course with new image URL
         const updatedCourse = await prisma.course.update({
             where: { id: courseId },
-            data: {
-                imageUrl: blob.url
-            },
+            data: { imageUrl: objectKey },
             select: {
                 id: true,
                 title: true,
@@ -80,7 +70,10 @@ export const addCourseImage = async (req, res) => {
 
         res.json({
             success: true,
-            data: updatedCourse,
+            data: {
+                ...updatedCourse,
+                imageUrl: await StorageService.resolveStorageUrl(updatedCourse.imageUrl),
+            },
             message: 'Course image updated successfully'
         });
     } catch (error) {

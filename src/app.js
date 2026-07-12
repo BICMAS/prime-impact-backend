@@ -1,60 +1,59 @@
 import express from 'express';
 import dotenv from 'dotenv';
-import { PrismaClient } from '@prisma/client';
-import { createClient } from 'redis';
-import { Pool } from 'pg';
-import { PrismaPg } from '@prisma/adapter-pg';
-import router from './routes/index.js';
 import cors from 'cors';
+import router from './routes/index.js';
+import { validateEnv, getCorsOrigins, isProductionEnv } from './config/env.js';
+import { prisma, pool } from './utils/db.js';
+import { getScormUploadTimeoutMs } from './middleware/scormUploadTimeout.js';
 
-dotenv.config();  // Load env early
+dotenv.config();
+validateEnv();
 
 const app = express();
 const port = process.env.PORT || 5000;
 
-
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
-const adapter = new PrismaPg(pool);
-const prisma = new PrismaClient({ adapter });
-
+const corsOrigins = getCorsOrigins();
+app.use(cors({
+    origin: corsOrigins.length > 0 ? corsOrigins : false,
+    credentials: true,
+}));
 
 app.use(express.json());
 app.use(express.urlencoded({ limit: '200mb', extended: true }));
 
+const defaultRequestTimeoutMs = Number(process.env.HTTP_REQUEST_TIMEOUT_MS) || 300000;
+const scormUploadTimeoutMs = getScormUploadTimeoutMs();
 
 app.use((req, res, next) => {
-    req.setTimeout(300000);  // 5min per request for everything
-    res.setTimeout(300000);
+    req.setTimeout(defaultRequestTimeoutMs);
+    res.setTimeout(defaultRequestTimeoutMs);
     next();
 });
-app.use(cors());
 
-// Health route
 app.get('/', (req, res) => {
-    res.json({ message: 'Hello World! This is the LLM project 🚀', timestamp: new Date().toISOString() });
+    res.json({
+        message: 'Prime Impact LMS API',
+        status: 'running',
+        timestamp: new Date().toISOString(),
+    });
+});
+
+app.get('/health', async (req, res) => {
+    try {
+        await prisma.$queryRaw`SELECT 1`;
+        res.json({ status: 'ok', database: 'connected', timestamp: new Date().toISOString() });
+    } catch (error) {
+        console.error('[HEALTH CHECK ERROR]', error);
+        res.status(503).json({ status: 'error', database: 'disconnected' });
+    }
 });
 
 app.use('/api/v1', router);
 
-// Prompts route (example—paginate if large)
-app.get('/prompts', async (req, res) => {
-    try {
-        const prompts = await prisma.prompt.findMany({
-            take: 20,  // Limit for perf
-            orderBy: { createdAt: 'desc' }
-        });
-        res.json(prompts);
-    } catch (error) {
-        console.error('Prompts query error:', error);
-        res.status(500).json({ error: 'Failed to fetch prompts' });
-    }
-});
-
-// Graceful shutdown
 process.on('SIGTERM', async () => {
     console.log('Shutting down gracefully...');
     await prisma.$disconnect();
-    // await redis.quit().catch(console.error);  // Uncomment if using Redis
+    await pool.end();
     process.exit(0);
 });
 
@@ -63,13 +62,19 @@ app.use((err, req, res, next) => {
     if (res.headersSent) {
         return next(err);
     }
-    res.status(err?.statusCode || 500).json({
-        error: err?.message || 'Internal server error'
-    });
+
+    const statusCode = err?.statusCode || 500;
+    const message = isProductionEnv() && statusCode >= 500
+        ? 'Internal server error'
+        : (err?.message || 'Internal server error');
+
+    res.status(statusCode).json({ error: message });
 });
 
 const server = app.listen(port, () => {
-    console.log(`Server running on http://localhost:${port}`);
+    console.log(`Server running on http://localhost:${port} (${process.env.NODE_ENV || 'development'})`);
 });
 server.keepAliveTimeout = 65000;
-server.timeout = 300000;
+server.timeout = scormUploadTimeoutMs;
+
+export default app;

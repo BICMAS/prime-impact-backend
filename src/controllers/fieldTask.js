@@ -1,9 +1,6 @@
-// src/controllers/FieldTaskController.js
-
-import { put } from '@vercel/blob';
+import { StorageService } from '../services/StorageService.js';
 import { prisma } from '../utils/db.js';
 
-// Create new field task (learner only)
 export const createFieldTask = async (req, res) => {
     try {
         const { moduleTitle, description } = req.body;
@@ -24,18 +21,14 @@ export const createFieldTask = async (req, res) => {
             return res.status(400).json({ success: false, error: 'User must belong to an organization' });
         }
 
-        const blob = await put(file.originalname, file.buffer, {
-            access: 'public',
-            token: process.env.BLOB_READ_WRITE_TOKEN,
-            addRandomSuffix: true,
-            contentType: file.mimetype
-        });
+        const objectKey = StorageService.buildObjectKey(`field-tasks/${userId}`, file.originalname);
+        await StorageService.uploadBuffer(objectKey, file.buffer, file.mimetype);
 
         const fieldTask = await prisma.fieldTask.create({
             data: {
                 moduleTitle: moduleTitle?.trim() || null,
                 description: description.trim(),
-                mediaUrl: blob.url,
+                mediaUrl: objectKey,
                 mediaType: file.mimetype.startsWith('image') ? 'image' : 'video',
                 createdBy: userId
             }
@@ -43,7 +36,10 @@ export const createFieldTask = async (req, res) => {
 
         res.status(201).json({
             success: true,
-            data: fieldTask,
+            data: {
+                ...fieldTask,
+                mediaUrl: await StorageService.resolveStorageUrl(fieldTask.mediaUrl),
+            },
             message: 'Field task submitted successfully'
         });
     } catch (error) {
@@ -52,8 +48,6 @@ export const createFieldTask = async (req, res) => {
     }
 };
 
-
-// View MY OWN tasks (for the learner)
 export const getMyFieldTasks = async (req, res) => {
     try {
         const userId = req.user.id;
@@ -80,14 +74,15 @@ export const getMyFieldTasks = async (req, res) => {
             }
         });
 
-        res.json({ success: true, data: tasks });
+        res.json({
+            success: true,
+            data: await StorageService.resolveStorageUrls(tasks, ['mediaUrl']),
+        });
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }
 };
 
-// View ALL tasks (HR_MANAGER / SUPER_ADMIN only)
-// src/controllers/FieldTaskController.js
 export const getAllFieldTasks = async (req, res) => {
     try {
         const userOrgId = req.user.orgId;
@@ -134,7 +129,7 @@ export const getAllFieldTasks = async (req, res) => {
 
         res.json({
             success: true,
-            data: tasks,
+            data: await StorageService.resolveStorageUrls(tasks, ['mediaUrl']),
             meta: {
                 orgId: effectiveOrgId,
                 total,
@@ -143,7 +138,6 @@ export const getAllFieldTasks = async (req, res) => {
                 pageCount: take > 0 ? Math.ceil(total / take) : 0
             }
         });
-
     } catch (error) {
         console.error('[GET ALL FIELD TASKS ERROR]', error.message);
         res.status(500).json({

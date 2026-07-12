@@ -15,11 +15,11 @@ const upload = multer({
     }
 });
 
-courseRouter.get('/', getCourses);
+courseRouter.get('/', authenticateToken, getCourses);
 courseRouter.post('/draft', authenticateToken, requireRole(['HR_MANAGER', 'SUPER_ADMIN']), createDraft);
 courseRouter.patch('/:id', authenticateToken, requireRole(['HR_MANAGER', 'SUPER_ADMIN']), updateCourse);
 courseRouter.patch('/:id/publish', authenticateToken, requireRole(['HR_MANAGER', 'SUPER_ADMIN']), publishCourse);
-courseRouter.get('/:id', getCourseById);
+courseRouter.get('/:id', authenticateToken, getCourseById);
 courseRouter.delete('/:id', authenticateToken, requireRole(['HR_MANAGER', 'SUPER_ADMIN']), deleteCourse);
 courseRouter.delete('/:courseId/modules/:moduleId', authenticateToken, requireRole(['HR_MANAGER', 'SUPER_ADMIN']), deleteModule);
 courseRouter.post('/:courseId/image', authenticateToken, upload.single('image'), addCourseImage);

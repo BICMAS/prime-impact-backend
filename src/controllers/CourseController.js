@@ -32,7 +32,7 @@ export const createDraft = async (req, res) => {
 export const updateCourse = async (req, res) => {
     try {
         const { id } = req.params;
-        const result = await CourseService.updateCourse(id, req.body);
+        const result = await CourseService.updateCourse(id, req.body, req.user);
         res.json(result);
     } catch (error) {
         res.status(400).json({ error: error.message });
@@ -42,7 +42,7 @@ export const updateCourse = async (req, res) => {
 export const publishCourse = async (req, res) => {
     try {
         const { id } = req.params;
-        const result = await CourseService.publishCourse(id, req.body);
+        const result = await CourseService.publishCourse(id, req.body, req.user);
         res.json(result);
     } catch (error) {
         res.status(400).json({ error: error.message });

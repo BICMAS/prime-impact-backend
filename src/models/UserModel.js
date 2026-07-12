@@ -27,7 +27,33 @@ export class UserModel {
             : { orgId: requesterOrgId };
         return prisma.user.findMany({
             where,
-            select: { id: true, username: true, email: true, fullName: true, userRole: true, status: true, orgId: true }
+            select: {
+                id: true,
+                username: true,
+                email: true,
+                fullName: true,
+                userRole: true,
+                status: true,
+                orgId: true,
+                department: true,
+                phoneNumber: true,
+                metadata: true,
+            }
+        });
+    }
+
+    static async recordLogin(userId, existingMetadata) {
+        const base = existingMetadata && typeof existingMetadata === 'object' && !Array.isArray(existingMetadata)
+            ? existingMetadata
+            : {};
+        return prisma.user.update({
+            where: { id: userId },
+            data: {
+                metadata: {
+                    ...base,
+                    lastLoginAt: new Date().toISOString(),
+                },
+            },
         });
     }
 

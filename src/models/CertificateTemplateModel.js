@@ -1,20 +1,16 @@
 import { prisma } from '../utils/db.js';
-import { put } from '@vercel/blob';
-import fs from 'fs';
+import { StorageService } from '../services/StorageService.js';
 
 export class CertificateTemplateModel {
     static async uploadAndSave(filePath, filename, mimeType, description, uploadedBy) {
         console.log('[CERT TEMPLATE MODEL] Uploading', filename);
-        const blobPath = `certificates/${Date.now()}-${filename}`;
-        const blob = await put(blobPath, fs.createReadStream(filePath), {
-            access: 'public',
-            token: process.env.BLOB_READ_WRITE_TOKEN
-        });
+        const objectKey = StorageService.buildObjectKey('certificates/templates', filename);
+        await StorageService.uploadFile(objectKey, filePath, mimeType);
 
         const template = await prisma.certificateTemplate.create({
             data: {
                 filename,
-                blobUrl: blob.url,
+                blobUrl: objectKey,
                 mimeType,
                 description,
                 createdBy: uploadedBy
@@ -22,7 +18,7 @@ export class CertificateTemplateModel {
             include: { creator: true }
         });
 
-        return { ...template, blob };
+        return template;
     }
 
     static async findMany() {

@@ -13,6 +13,7 @@ import {
 } from '../controllers/ScormController.js';
 import { authenticateToken, requireRole } from '../middleware/authMiddleware.js';
 import { uploadMiddleware } from '../middleware/fileUploadMiddleware.js';
+import { scormUploadTimeout } from '../middleware/scormUploadTimeout.js';
 
 const scormRouter = Router();
 
@@ -28,6 +29,7 @@ scormRouter.post(
     '/',
     authenticateToken,
     requireRole(['SUPER_ADMIN', 'HR_MANAGER']),
+    scormUploadTimeout,
     uploadMiddleware,
     uploadPackage
 );
@@ -37,6 +39,10 @@ scormRouter.get('/',
     authenticateToken,
     getPackages
 );
+
+// Static paths must come before /:id
+scormRouter.get('/user/scorm-scores', authenticateToken, getUserScormScore);
+scormRouter.get('/scorm-attempts/user/sync', authenticateToken, syncAndGetUserScormProgress);
 
 // Get specific SCORM package details
 scormRouter.get('/:id',
@@ -62,8 +68,5 @@ scormRouter.delete('/:id',
     requireRole(['SUPER_ADMIN', 'HR_MANAGER']),
     deletePackage
 );
-
-scormRouter.get('/user/scorm-scores', authenticateToken, getUserScormScore);
-scormRouter.get('/scorm-attempts/user/sync', authenticateToken, syncAndGetUserScormProgress);
 
 export default scormRouter;

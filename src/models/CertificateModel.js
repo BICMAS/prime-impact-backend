@@ -11,6 +11,33 @@ export class CertificateModel {
         });
     }
 
+    static async findCertificateById(id) {
+        return prisma.certificate.findUnique({
+            where: { id }
+        });
+    }
+
+    static async findCertificatesByOrgId(orgId) {
+        return prisma.certificate.findMany({
+            where: { user: { orgId } },
+            include: { user: true, course: true }
+        });
+    }
+
+    static async findCertificatesByCourseId(courseId) {
+        return prisma.certificate.findMany({
+            where: { courseId },
+            include: { user: true, course: true }
+        });
+    }
+
+    static async updateCertificate(id, data) {
+        return prisma.certificate.update({
+            where: { id },
+            data
+        });
+    }
+
     static async createCertificate({ userId, courseId, templateId, pdfPath, issuedAt }) {
         return prisma.certificate.create({
             data: {
@@ -96,5 +123,19 @@ export class CertificateModel {
         });
         if (!match?.payload || typeof match.payload !== 'object') return null;
         return match.payload?.templateId || null;
+    }
+
+    static async getAssignedTemplateForOrg(orgId) {
+        const log = await prisma.auditLog.findFirst({
+            where: {
+                eventType: ORG_TEMPLATE_EVENT,
+                targetType: 'ORGANIZATION',
+                targetId: orgId
+            },
+            orderBy: { createdAt: 'desc' }
+        });
+
+        if (!log?.payload || typeof log.payload !== 'object') return null;
+        return log.payload?.templateId || null;
     }
 }

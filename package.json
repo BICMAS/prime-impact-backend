@@ -8,9 +8,11 @@
     "postinstall": "prisma generate",
     "build": "babel src --out-dir dist",
     "start": "node src/app.js",
-    "dev": "nodemon --watch src --ignore uploads --ignore uploads/** app.js",
+    "dev": "nodemon --watch src --ext js,mjs,cjs,json --ignore uploads src/app.js",
     "watch": "babel src --out-dir dist --watch",
     "seed": "node src/prisma/seed.js",
+    "test": "node scripts/smoke-test.js",
+    "test:smoke": "node scripts/smoke-test.js",
     "backfill:attempts:dry": "node src/scripts/backfillAttemptsFromScorm.js",
     "backfill:attempts:apply": "node src/scripts/backfillAttemptsFromScorm.js --apply"
   },
@@ -20,6 +22,7 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.978.0",
     "@aws-sdk/lib-storage": "^3.978.0",
+    "@aws-sdk/s3-request-presigner": "^3.1078.0",
     "@prisma/adapter-pg": "^7.1.0",
     "@prisma/client": "^7.1.0",
     "@vercel/blob": "^2.0.0",

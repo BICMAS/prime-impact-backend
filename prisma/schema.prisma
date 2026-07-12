@@ -112,6 +112,7 @@ model User {
   quizAttempts                QuizAttempt[]
   fieldTasks                  FieldTask[]
   announcements               Announcement[]
+  coinAwards                  CoinAward[]
 
   @@map("users")
 }
@@ -501,6 +502,35 @@ model LearningPathEnrolment {
 enum LearningPathStatus {
   DRAFT
   PUBLISHED
+}
+
+model EconomyConfig {
+  id                 String   @id @default("default")
+  courseCompletion   Int      @default(50)
+  moduleCompletion   Int      @default(10)
+  perfectQuiz        Int      @default(25)
+  dailyStreak        Int      @default(5)
+  streakDaysRequired Int      @default(7)
+  enableLeaderboard  Boolean  @default(true)
+  updatedAt          DateTime @updatedAt
+  updatedBy          String?  @db.VarChar(25)
+
+  @@map("economy_config")
+}
+
+model CoinAward {
+  id          String   @id @default(cuid()) @db.VarChar(25)
+  userId      String   @db.VarChar(25)
+  awardType   String   @db.VarChar(50)
+  referenceId String   @db.VarChar(100)
+  points      Int
+  createdAt   DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, awardType, referenceId])
+  @@index([userId, createdAt])
+  @@map("coin_awards")
 }
 
 model FieldTask {

@@ -1,4 +1,5 @@
 import { GroupModel } from '../models/GroupModel.js';
+import { prisma } from '../utils/db.js';
 
 export class GroupService {
     static async getGroups() {

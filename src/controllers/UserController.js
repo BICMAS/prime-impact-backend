@@ -30,10 +30,13 @@ export const getCurrentOrgUsers = async (req, res) => {
 export const getUser = async (req, res) => {
     try {
         const { id } = req.params;
-        const user = await UserService.getUser(id);
+        const user = await UserService.getUser(id, req.user);
         res.json(user);
     } catch (error) {
-        res.status(404).json({ error: error.message });
+        const status = error.message === 'Access denied' || error.message.includes('Insufficient role')
+            ? 403
+            : 404;
+        res.status(status).json({ error: error.message });
     }
 };
 
@@ -109,7 +112,7 @@ export const bulkUpload = (req, res) => {
             .on('end', async () => {
                 fs.unlinkSync(req.file.path);  // Clean up
                 try {
-                    const result = await UserService.bulkUpload(results);
+                    const result = await UserService.bulkUpload(results, req.user);
                     res.json(result);
                 } catch (error) {
                     res.status(400).json({ error: error.message });

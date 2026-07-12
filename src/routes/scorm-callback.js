@@ -1,39 +1,68 @@
 import express from 'express';
+import crypto from 'crypto';
 import { prisma } from '../utils/db.js';
+import { isProductionEnv } from '../config/env.js';
+import { EconomyService } from '../service/EconomyService.js';
+import { AttemptService } from '../service/AttemptService.js';
 
 const scormCallbackRouter = express.Router();
 
-// SCORM Cloud posts completion data here
+function verifyCallbackSecret(req) {
+    const expected = process.env.SCORM_CALLBACK_SECRET;
+    if (!expected) {
+        return !isProductionEnv();
+    }
+
+    const provided = req.headers['x-scorm-callback-secret']
+        || req.query.secret
+        || req.body?.secret;
+
+    if (!provided || typeof provided !== 'string') {
+        return false;
+    }
+
+    const providedBuffer = Buffer.from(provided);
+    const expectedBuffer = Buffer.from(expected);
+
+    if (providedBuffer.length !== expectedBuffer.length) {
+        return false;
+    }
+
+    return crypto.timingSafeEqual(providedBuffer, expectedBuffer);
+}
+
 scormCallbackRouter.post('/', express.urlencoded({ extended: true }), async (req, res) => {
-    console.log('[SCORM CALLBACK] Received:', req.body);
+    if (!verifyCallbackSecret(req)) {
+        console.warn('[SCORM CALLBACK] Rejected: invalid or missing secret');
+        return res.status(401).send('Unauthorized');
+    }
+
+    console.log('[SCORM CALLBACK] Received registration update');
 
     try {
         const {
             registration_id,
             course_id,
-            learner_id,
             score,
             completion_status,
             total_seconds,
             success_status
         } = req.body;
 
-        if (!registration_id || !learner_id) {
-            console.warn('[SCORM CALLBACK] Missing registration_id or learner_id');
+        if (!registration_id) {
+            console.warn('[SCORM CALLBACK] Missing registration_id');
             return res.status(200).send('OK');
         }
 
-        // Find package by SCORM Cloud course ID
         const scormPackage = await prisma.scormPackage.findFirst({
             where: { scormCloudId: course_id }
         });
 
         if (!scormPackage) {
             console.warn('[SCORM CALLBACK] Package not found for course:', course_id);
-            return res.status(200).send('OK'); // Always return OK to SCORM Cloud
+            return res.status(200).send('OK');
         }
 
-        // Map SCORM status to your AttemptStatus enum
         const mapStatus = (scormStatus) => {
             switch (scormStatus?.toLowerCase()) {
                 case 'passed': return 'PASSED';
@@ -50,19 +79,25 @@ scormCallbackRouter.post('/', express.urlencoded({ extended: true }), async (req
         const mappedStatus = mapStatus(completion_status || success_status);
         const completion = parsedScore * 100;
 
-        const scormAttempt = await prisma.scormAttempt.findUnique({
+        const existingScormAttempt = await prisma.scormAttempt.findUnique({
             where: { scormCloudRegistrationId: registration_id },
             include: { attempt: { select: { id: true } } }
         });
 
-        let courseAttemptId = scormAttempt?.attemptId || null;
+        if (!existingScormAttempt) {
+            console.warn('[SCORM CALLBACK] Unknown registration_id:', registration_id);
+            return res.status(200).send('OK');
+        }
 
-        // If no link exists yet, use/seed a package-level Attempt so learner appears in attempts table.
+        const learnerId = existingScormAttempt.userId;
+        const previousScormStatus = existingScormAttempt.status;
+        let courseAttemptId = existingScormAttempt.attemptId || null;
+
         if (!courseAttemptId) {
             const packageAttempt = await prisma.attempt.upsert({
                 where: {
                     userId_scormPackageId: {
-                        userId: learner_id,
+                        userId: learnerId,
                         scormPackageId: scormPackage.id
                     }
                 },
@@ -74,7 +109,7 @@ scormCallbackRouter.post('/', express.urlencoded({ extended: true }), async (req
                     updatedAt: new Date()
                 },
                 create: {
-                    userId: learner_id,
+                    userId: learnerId,
                     scormPackageId: scormPackage.id,
                     status: mappedStatus,
                     completionPercentage: completion,
@@ -97,16 +132,10 @@ scormCallbackRouter.post('/', express.urlencoded({ extended: true }), async (req
             });
         }
 
-        await prisma.scormAttempt.upsert({
-            where: {
-                userId_scormPackageId: {
-                    userId: learner_id,
-                    scormPackageId: scormPackage.id
-                }
-            },
-            update: {
+        await prisma.scormAttempt.update({
+            where: { id: existingScormAttempt.id },
+            data: {
                 attemptId: courseAttemptId,
-                scormCloudRegistrationId: registration_id,
                 status: mappedStatus,
                 completionPercentage: completion,
                 score: parsedScore,
@@ -115,30 +144,26 @@ scormCallbackRouter.post('/', express.urlencoded({ extended: true }), async (req
                 scormCloudCompletion: completion / 100,
                 scormCloudScoreScaled: parsedScore,
                 updatedAt: new Date()
-            },
-            create: {
-                userId: learner_id,
-                scormPackageId: scormPackage.id,
-                attemptId: courseAttemptId,
-                scormCloudRegistrationId: registration_id,
-                status: mappedStatus,
-                completionPercentage: completion,
-                score: parsedScore,
-                learningHours: parsedLearningHours,
-                scormCloudLastSyncAt: new Date(),
-                scormCloudCompletion: completion / 100,
-                scormCloudScoreScaled: parsedScore
             }
         });
 
-        console.log('[SCORM CALLBACK] Successfully updated attempt for learner:', learner_id);
-        res.status(200).send('OK');
+        await EconomyService.onModuleCompleted(
+            learnerId,
+            scormPackage.id,
+            previousScormStatus,
+            mappedStatus,
+        );
 
+        if (courseAttemptId) {
+            await AttemptService.rollUpCourseCompletion(courseAttemptId);
+        }
+
+        console.log('[SCORM CALLBACK] Updated attempt for learner:', learnerId);
+        res.status(200).send('OK');
     } catch (error) {
         console.error('[SCORM CALLBACK ERROR]', error);
-        // Still return OK so SCORM Cloud doesn't retry
         res.status(200).send('OK');
     }
 });
 
-export default scormCallbackRouter
+export default scormCallbackRouter;

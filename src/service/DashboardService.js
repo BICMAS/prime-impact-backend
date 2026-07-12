@@ -29,15 +29,22 @@ export class DashboardService {
 
     static async getSuperAdminDashboard() {
         console.log('[DASHBOARD SERVICE SUPER] Fetching global dashboard');
-        const [activeLearners, completionRate, averageSession, systemLoad, recentActivities, learningActivityGraph, recentActivity, criticalAlerts] = await Promise.all([
+        const [
+            activeLearners,
+            completionRate,
+            averageSession,
+            systemLoad,
+            recentActivities,
+            learningActivityGraph,
+            recentActivity,
+        ] = await Promise.all([
             DashboardModel.getActiveLearners(),
             DashboardModel.getCompletionRate(),
-            //DashboardModel.getAverageSession(),
+            DashboardModel.getAverageSession(),
             DashboardModel.getSystemLoad(),
             DashboardModel.getRecentActivities(),
             DashboardModel.getLearningActivityGraph(),
             DashboardModel.getRecentActivity(),
-            // DashboardModel.getCriticalAlerts()
         ]);
 
         return {
@@ -46,9 +53,8 @@ export class DashboardService {
             averageSession,
             systemLoad,
             recentActivities,
-            learningActivityGraph,  // For frontend line chart
+            learningActivityGraph,
             recentActivity,
-            //criticalAlerts
         };
     }
 

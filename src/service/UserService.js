@@ -48,10 +48,19 @@ export class UserService {
         return users;
     }
 
-    static async getUser(id) {
+    static async getUser(id, requester) {
         const user = await UserModel.findById(id);
         if (!user) throw new Error('User not found');
-        return { ...user, password: undefined };
+
+        if (requester.userRole === 'HR_MANAGER') {
+            if (!requester.orgId || user.orgId !== requester.orgId) {
+                throw new Error('Access denied');
+            }
+        } else if (requester.userRole !== 'SUPER_ADMIN') {
+            throw new Error('Insufficient role to view users');
+        }
+
+        return UserService.sanitizeUser(user);
     }
 
     static async createUser(data, creator) {
@@ -192,5 +201,63 @@ export class UserService {
 
         await UserModel.deleteById(id);
         return UserService.sanitizeUser(existing);
+    }
+
+    static async bulkUpload(rows, creator) {
+        if (!Array.isArray(rows) || rows.length === 0) {
+            throw new Error('CSV data required');
+        }
+
+        if (creator.userRole !== 'SUPER_ADMIN' && creator.userRole !== 'HR_MANAGER') {
+            throw new Error('Insufficient role to bulk upload users');
+        }
+
+        const usersToCreate = [];
+
+        for (const [index, row] of rows.entries()) {
+            const fullName = row.fullName || row.full_name || row.name;
+            const email = row.email;
+            const password = row.password || row.temporaryPassword;
+            const department = row.department;
+            const userRole = row.userRole || row.user_role || 'LEARNER';
+            const username = row.username || null;
+            const phoneNumber = row.phoneNumber || row.phone_number || null;
+
+            if (!fullName || !email || !password || !department) {
+                throw new Error(`Row ${index + 1}: fullName, email, password, and department are required`);
+            }
+
+            if (creator.userRole === 'HR_MANAGER' && userRole !== 'LEARNER') {
+                throw new Error(`Row ${index + 1}: HR can only create learners`);
+            }
+
+            const existing = await UserModel.findByEmail(email);
+            if (existing) {
+                continue;
+            }
+
+            usersToCreate.push({
+                fullName,
+                email,
+                username,
+                phoneNumber,
+                department,
+                userRole,
+                password: await bcrypt.hash(password, 12),
+                orgId: creator.userRole === 'HR_MANAGER' ? creator.orgId : (row.orgId || null),
+                status: 'ACTIVE',
+                authProvider: 'LOCAL',
+            });
+        }
+
+        if (usersToCreate.length === 0) {
+            return { created: 0, skipped: rows.length, message: 'No new users to create' };
+        }
+
+        const result = await UserModel.bulkCreate(usersToCreate);
+        return {
+            created: result.count,
+            skipped: rows.length - result.count,
+        };
     }
 }

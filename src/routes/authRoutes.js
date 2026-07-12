@@ -1,14 +1,15 @@
 import { Router } from 'express';
-import { authenticateToken, requireRole } from '../middleware/authMiddleware.js';
+import { authenticateToken } from '../middleware/authMiddleware.js';
+import { authRateLimiter } from '../middleware/rateLimitMiddleware.js';
 import { login, ssoCallback, refresh, logout, registerDevice, verifyMFA, phoneLogin } from '../controllers/AuthControllers.js';
 
 const authRouter = Router();
 
-// Public
-authRouter.post('/login', login);
-authRouter.post('/phone-login', phoneLogin);
-authRouter.post('/sso/callback', ssoCallback);
-authRouter.post('/refresh', refresh);
+// Public (rate-limited)
+authRouter.post('/login', authRateLimiter, login);
+authRouter.post('/phone-login', authRateLimiter, phoneLogin);
+authRouter.post('/sso/callback', authRateLimiter, ssoCallback);
+authRouter.post('/refresh', authRateLimiter, refresh);
 
 // Protected
 authRouter.post('/logout', authenticateToken, logout);

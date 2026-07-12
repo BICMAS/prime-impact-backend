@@ -14,7 +14,7 @@ export const updateProgress = async (req, res) => {
 export const syncScormProgress = async (req, res) => {
     try {
         const { scormAttemptId } = req.params;
-        const updated = await AttemptService.syncScormProgress(scormAttemptId);
+        const updated = await AttemptService.syncScormProgress(scormAttemptId, req.user);
         res.json({
             success: true,
             data: updated

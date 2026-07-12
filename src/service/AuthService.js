@@ -1,6 +1,9 @@
 import bcrypt from 'bcryptjs';
 import { generateTokens, verifyToken } from '../utils/jwtUtils.js';
 import { UserModel } from '../models/UserModel.js';
+import { EconomyService } from './EconomyService.js';
+import { prisma } from '../utils/db.js';
+import { isFeatureEnabled, isProductionEnv } from '../config/env.js';
 
 export class AuthService {
     static async login(email, password) {
@@ -13,6 +16,11 @@ export class AuthService {
 
         const passwordMatch = await bcrypt.compare(password, user.password);
         if (!passwordMatch) throw new Error('Invalid credentials');
+
+        await UserModel.recordLogin(user.id, user.metadata);
+        if (user.userRole === 'LEARNER') {
+            await EconomyService.processLoginStreak(user.id);
+        }
 
         const { accessToken, refreshToken } = generateTokens(user.id, user.userRole);
         return { accessToken, refreshToken, user: { id: user.id, email: user.email, userRole: user.userRole } };
@@ -29,6 +37,11 @@ export class AuthService {
 
         const passwordMatch = await bcrypt.compare(password, user.password);
         if (!passwordMatch) throw new Error('Invalid credentials');
+
+        await UserModel.recordLogin(user.id, user.metadata);
+        if (user.userRole === 'LEARNER') {
+            await EconomyService.processLoginStreak(user.id);
+        }
 
         const { accessToken, refreshToken } = generateTokens(user.id, user.userRole);
         return {
@@ -64,23 +77,26 @@ export class AuthService {
     }
 
     static async verifyMFA(userId, mfaToken, setup = false) {
+        if (isProductionEnv() && !isFeatureEnabled('ENABLE_MFA')) {
+            throw new Error('MFA is not configured');
+        }
+
         const user = await UserModel.findById(userId);
+        if (!user) throw new Error('User not found');
+
         if (setup) {
-            // Stub: Generate secret (use speakeasy)
-            return { secret: 'JBSWY3DPEHPK3PXP', message: 'Scan QR' };
+            throw new Error('MFA setup is not configured');
         }
 
         if (!mfaToken) throw new Error('MFA token required');
-        // Stub: Verify (use speakeasy.totp.verify)
-        if (mfaToken !== '123456') throw new Error('Invalid MFA token');
-        return { message: 'MFA verified' };
+        throw new Error('MFA is not configured');
     }
 
     static async ssoCallback(code) {
         if (!code) throw new Error('Authorization code required');
-        // Stub: Exchange code for user (integrate OAuth lib)
-        const user = { id: 'sso-user-id', email: 'sso@example.com', userRole: 'TRAINEE' };
-        const { accessToken, refreshToken } = generateTokens(user.id, user.userRole);
-        return { accessToken, refreshToken, user };
+        if (isProductionEnv() && !isFeatureEnabled('ENABLE_SSO')) {
+            throw new Error('SSO is not configured');
+        }
+        throw new Error('SSO is not configured');
     }
 }

@@ -3,6 +3,7 @@
 import axios from 'axios';
 import fs from 'fs';
 import { v4 as uuidv4 } from 'uuid';
+import { getScormUploadTimeoutForBytes, getScormUploadTimeoutMs } from '../middleware/scormUploadTimeout.js';
 
 export class ScormCloudService {
     static client = null;
@@ -25,7 +26,7 @@ export class ScormCloudService {
                     password: process.env.SCORM_CLOUD_SECRET_KEY,
                 },
                 headers: { Accept: 'application/json' },
-                timeout: 300000,
+                timeout: 60000,
                 maxContentLength: Infinity,
                 maxBodyLength: Infinity,
             });
@@ -65,10 +66,15 @@ export class ScormCloudService {
         const endpoint = `/courses/importJobs/upload?courseId=${encodeURIComponent(courseId)}`;
 
         console.log(`[UPLOAD] POST to: ${endpoint}`);
+        const uploadTimeoutMs = getScormUploadTimeoutForBytes(stats.size);
+        console.log(
+            `[UPLOAD] Allowing ${Math.round(uploadTimeoutMs / 60000)} min for ${(stats.size / (1024 * 1024)).toFixed(1)} MB`
+        );
         const res = await client.post(endpoint, form, {
             headers: form.getHeaders(),
             maxContentLength: Infinity,
             maxBodyLength: Infinity,
+            timeout: uploadTimeoutMs,
         });
 
         console.log('[UPLOAD] Status:', res.status);
@@ -106,6 +112,7 @@ export class ScormCloudService {
         console.log(`[POLL] Job ${jobId} → Course ${courseId} | ${maxAttempts} attempts (~30 min)`);
 
         const client = this.init();
+        const pollTimeoutMs = Math.min(getScormUploadTimeoutMs(), 600000);
 
         await new Promise(r => setTimeout(r, 15000)); // initial delay
 
@@ -113,7 +120,7 @@ export class ScormCloudService {
             await new Promise(r => setTimeout(r, intervalMs));
 
             try {
-                const courseRes = await client.get(`/courses/${courseId}`);
+                const courseRes = await client.get(`/courses/${courseId}`, { timeout: pollTimeoutMs });
                 const course = courseRes.data;
 
                 console.log(`[POLL ${attempt}] Course READY! Title: ${course.title}`);
