@@ -4,6 +4,7 @@ import { prisma } from '../utils/db.js';
 import { isProductionEnv } from '../config/env.js';
 import { EconomyService } from '../service/EconomyService.js';
 import { AttemptService } from '../service/AttemptService.js';
+import { normalizeCallbackPayload } from '../utils/scormScore.js';
 
 const scormCallbackRouter = express.Router();
 
@@ -43,10 +44,7 @@ scormCallbackRouter.post('/', express.urlencoded({ extended: true }), async (req
         const {
             registration_id,
             course_id,
-            score,
-            completion_status,
             total_seconds,
-            success_status
         } = req.body;
 
         if (!registration_id) {
@@ -63,22 +61,6 @@ scormCallbackRouter.post('/', express.urlencoded({ extended: true }), async (req
             return res.status(200).send('OK');
         }
 
-        const mapStatus = (scormStatus) => {
-            switch (scormStatus?.toLowerCase()) {
-                case 'passed': return 'PASSED';
-                case 'completed': return 'COMPLETED';
-                case 'failed': return 'FAILED';
-                case 'incomplete': return 'INCOMPLETE';
-                case 'browsed': return 'INCOMPLETE';
-                default: return 'INCOMPLETE';
-            }
-        };
-
-        const parsedScore = score ? parseFloat(score) : 0;
-        const parsedLearningHours = total_seconds ? parseFloat(total_seconds) / 3600 : null;
-        const mappedStatus = mapStatus(completion_status || success_status);
-        const completion = parsedScore * 100;
-
         const existingScormAttempt = await prisma.scormAttempt.findUnique({
             where: { scormCloudRegistrationId: registration_id },
             include: { attempt: { select: { id: true } } }
@@ -89,9 +71,22 @@ scormCallbackRouter.post('/', express.urlencoded({ extended: true }), async (req
             return res.status(200).send('OK');
         }
 
+        const normalized = normalizeCallbackPayload(
+            req.body,
+            existingScormAttempt.completionPercentage ?? 0,
+        );
+
         const learnerId = existingScormAttempt.userId;
         const previousScormStatus = existingScormAttempt.status;
         let courseAttemptId = existingScormAttempt.attemptId || null;
+
+        const attemptData = {
+            status: normalized.status,
+            completionPercentage: normalized.completionPercentage,
+            score: normalized.scoreRaw,
+            learningHours: normalized.learningHours,
+            updatedAt: new Date(),
+        };
 
         if (!courseAttemptId) {
             const packageAttempt = await prisma.attempt.upsert({
@@ -101,20 +96,11 @@ scormCallbackRouter.post('/', express.urlencoded({ extended: true }), async (req
                         scormPackageId: scormPackage.id
                     }
                 },
-                update: {
-                    status: mappedStatus,
-                    completionPercentage: completion,
-                    score: parsedScore,
-                    learningHours: parsedLearningHours,
-                    updatedAt: new Date()
-                },
+                update: attemptData,
                 create: {
                     userId: learnerId,
                     scormPackageId: scormPackage.id,
-                    status: mappedStatus,
-                    completionPercentage: completion,
-                    score: parsedScore,
-                    learningHours: parsedLearningHours
+                    ...attemptData,
                 },
                 select: { id: true }
             });
@@ -122,13 +108,7 @@ scormCallbackRouter.post('/', express.urlencoded({ extended: true }), async (req
         } else {
             await prisma.attempt.update({
                 where: { id: courseAttemptId },
-                data: {
-                    status: mappedStatus,
-                    completionPercentage: completion,
-                    score: parsedScore,
-                    learningHours: parsedLearningHours,
-                    updatedAt: new Date()
-                }
+                data: attemptData,
             });
         }
 
@@ -136,13 +116,13 @@ scormCallbackRouter.post('/', express.urlencoded({ extended: true }), async (req
             where: { id: existingScormAttempt.id },
             data: {
                 attemptId: courseAttemptId,
-                status: mappedStatus,
-                completionPercentage: completion,
-                score: parsedScore,
-                learningHours: parsedLearningHours,
+                status: normalized.status,
+                completionPercentage: normalized.completionPercentage,
+                score: normalized.scoreRaw,
+                learningHours: normalized.learningHours,
                 scormCloudLastSyncAt: new Date(),
-                scormCloudCompletion: completion / 100,
-                scormCloudScoreScaled: parsedScore,
+                scormCloudCompletion: normalized.scormCloudCompletion,
+                scormCloudScoreScaled: normalized.scoreScaled,
                 updatedAt: new Date()
             }
         });
@@ -151,10 +131,19 @@ scormCallbackRouter.post('/', express.urlencoded({ extended: true }), async (req
             learnerId,
             scormPackage.id,
             previousScormStatus,
-            mappedStatus,
+            normalized.status,
         );
 
+        if (normalized.scorePercent === 100) {
+            await EconomyService.onPerfectQuiz(learnerId, scormPackage.id);
+        }
+
         if (courseAttemptId) {
+            courseAttemptId = await AttemptService.ensureCourseAttemptLink(
+                learnerId,
+                scormPackage.id,
+                courseAttemptId,
+            );
             await AttemptService.rollUpCourseCompletion(courseAttemptId);
         }
 

@@ -3,6 +3,7 @@ import { ScormCloudService } from '../services/ScormCloudService.js';
 import { AttemptModel } from '../models/AttemptModel.js';
 import { LearningPathEnrolmentModel } from '../models/LearningPathEnrolmentModel.js';
 import { EconomyService } from './EconomyService.js';
+import { normalizeScormRegistration, computeScorePercent } from '../utils/scormScore.js';
 
 export class AttemptService {
     // Your existing course-level update (unchanged)
@@ -59,16 +60,16 @@ export class AttemptService {
         const res = await client.get(`/registrations/${registrationId}`);
 
         const registration = res.data;
+        const normalized = normalizeScormRegistration(registration);
 
-        // Map Cloud data to ScormAttempt
         const updateData = {
-            status: registration.registrationCompletion === 'COMPLETED' ? 'COMPLETED' : 'IN_PROGRESS',
-            completionPercentage: Math.round((registration.registrationCompletionAmount || 0) * 100),
-            score: registration.score?.raw || null,
-            learningHours: registration.totalSecondsTracked ? registration.totalSecondsTracked / 3600 : null,
+            status: normalized.status,
+            completionPercentage: normalized.completionPercentage,
+            score: normalized.scoreRaw,
+            learningHours: normalized.learningHours,
             scormCloudLastSyncAt: new Date(),
-            scormCloudCompletion: registration.registrationCompletionAmount || 0,
-            scormCloudScoreScaled: registration.score?.scaled || null,
+            scormCloudCompletion: normalized.scormCloudCompletion,
+            scormCloudScoreScaled: normalized.scoreScaled,
             updatedAt: new Date()
         };
 
@@ -85,9 +86,17 @@ export class AttemptService {
             updated.status,
         );
 
-        // Roll up to course Attempt if linked
+        if (normalized.scorePercent === 100) {
+            await EconomyService.onPerfectQuiz(updated.userId, updated.scormPackageId);
+        }
+
         if (updated.attemptId) {
-            await AttemptService.rollUpCourseCompletion(updated.attemptId);
+            const linkedAttemptId = await AttemptService.ensureCourseAttemptLink(
+                updated.userId,
+                updated.scormPackageId,
+                updated.attemptId,
+            );
+            await AttemptService.rollUpCourseCompletion(linkedAttemptId);
         }
 
         return updated;
@@ -105,6 +114,46 @@ export class AttemptService {
     }
 
     // Roll up package progress to course-level Attempt
+    static async ensureCourseAttemptLink(userId, scormPackageId, packageAttemptId) {
+        const lesson = await prisma.lesson.findFirst({
+            where: { scormPackageId },
+            select: {
+                module: {
+                    select: { courseId: true },
+                },
+            },
+        });
+
+        const courseId = lesson?.module?.courseId;
+        if (!courseId) return packageAttemptId;
+
+        const courseAttempt = await prisma.attempt.upsert({
+            where: {
+                userId_courseId: { userId, courseId },
+            },
+            update: {
+                scormPackageId,
+                updatedAt: new Date(),
+            },
+            create: {
+                userId,
+                courseId,
+                scormPackageId,
+                status: 'IN_PROGRESS',
+                completionPercentage: 0,
+            },
+            select: { id: true },
+        });
+
+        await prisma.scormAttempt.updateMany({
+            where: { userId, scormPackageId },
+            data: { attemptId: courseAttempt.id },
+        });
+
+        await AttemptService.rollUpCourseCompletion(courseAttempt.id);
+        return courseAttempt.id;
+    }
+
     static async rollUpCourseCompletion(courseAttemptId) {
         const courseAttempt = await prisma.attempt.findUnique({
             where: { id: courseAttemptId },
@@ -122,11 +171,19 @@ export class AttemptService {
 
         const newStatus = avgCompletion >= 100 ? 'COMPLETED' : 'IN_PROGRESS';
 
+        const scorePercents = packageAttempts
+            .map((item) => computeScorePercent(item.score, item.scormCloudScoreScaled))
+            .filter((value) => value != null);
+        const rolledUpScore = scorePercents.length > 0
+            ? Math.round(scorePercents.reduce((sum, value) => sum + value, 0) / scorePercents.length)
+            : null;
+
         await prisma.attempt.update({
             where: { id: courseAttemptId },
             data: {
                 completionPercentage: avgCompletion,
                 status: newStatus,
+                score: rolledUpScore,
                 updatedAt: new Date()
             }
         });

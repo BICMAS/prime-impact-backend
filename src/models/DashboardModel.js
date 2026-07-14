@@ -1,4 +1,6 @@
 import { prisma } from '../utils/db.js';
+import { getAssignmentCompletionState } from '../lib/courseCompletion.js';
+import { computeScorePercent } from '../utils/scormScore.js';
 
 /** Course has no orgId; scope assignments by learner or group in the org. */
 function assignmentWhereForOrg(orgId) {
@@ -84,6 +86,15 @@ export class DashboardModel {
                     id: true,
                     fullName: true,
                     email: true,
+                    department: true,
+                    points: true,
+                    scormAttempts: {
+                        select: {
+                            score: true,
+                            scormCloudScoreScaled: true,
+                            completionPercentage: true,
+                        },
+                    },
                     userAttempts: {
                         select: { completionPercentage: true },
                         where: { status: 'COMPLETED' }
@@ -91,16 +102,28 @@ export class DashboardModel {
                 }
             });
             const ranked = users
-                .map((u) => ({
-                    id: u.id,
-                    fullName: u.fullName,
-                    email: u.email,
-                    attempts: u.userAttempts,
-                    avgCompletion: Math.round(
+                .map((u) => {
+                    const scorePercents = u.scormAttempts
+                        .map((attempt) => computeScorePercent(attempt.score, attempt.scormCloudScoreScaled))
+                        .filter((value) => value != null);
+                    const avgScore = scorePercents.length > 0
+                        ? Math.round(scorePercents.reduce((sum, value) => sum + value, 0) / scorePercents.length)
+                        : 0;
+                    const avgCompletion = Math.round(
                         (u.userAttempts.reduce((sum, a) => sum + (a.completionPercentage || 0), 0) / Math.max(u.userAttempts.length, 1)) * 100
-                    ) / 100
-                }))
-                .sort((a, b) => b.avgCompletion - a.avgCompletion)
+                    ) / 100;
+
+                    return {
+                        id: u.id,
+                        fullName: u.fullName,
+                        email: u.email,
+                        department: u.department,
+                        points: u.points,
+                        avgScore,
+                        avgCompletion,
+                    };
+                })
+                .sort((a, b) => b.points - a.points)
                 .slice(0, limit);
             return ranked;
         } catch (error) {
@@ -304,12 +327,18 @@ export class DashboardModel {
     }
 
     static async getCoursesDone(userId) {
-        const uniqueCourses = await prisma.attempt.groupBy({
-            by: ['courseId'],
-            where: { userId, status: 'COMPLETED' },
-            _count: { courseId: true }
+        const assignments = await prisma.assignment.findMany({
+            where: { assigneeUserId: userId },
+            select: { courseId: true },
         });
-        return uniqueCourses.length;
+
+        let completedCount = 0;
+        for (const assignment of assignments) {
+            const state = await getAssignmentCompletionState(userId, assignment.courseId);
+            if (state.complete) completedCount += 1;
+        }
+
+        return completedCount;
     }
 
     static async getAverageScore(userId) {
@@ -445,20 +474,19 @@ export class DashboardModel {
     static async getUnfinishedCourses(userId) {
         console.log('[DASHBOARD MODEL] getUnfinishedCourses for userId:', userId);
         try {
-            // FIXED: First find all assignments for user
             const assignments = await prisma.assignment.findMany({
                 where: { assigneeUserId: userId },
-                include: { course: true }
+                include: { course: true },
             });
 
-            // FIXED: Second, find completed courses for user (unique courseIds)
-            const completedCourses = await prisma.attempt.findMany({
-                where: { userId, status: 'COMPLETED' },
-                select: { courseId: true }
-            }).then(attempts => [...new Set(attempts.map(a => a.courseId))]);  // Unique courseIds
+            const unfinished = [];
+            for (const assignment of assignments) {
+                const state = await getAssignmentCompletionState(userId, assignment.courseId);
+                if (!state.complete) {
+                    unfinished.push(assignment);
+                }
+            }
 
-            // FIXED: Filter assignments without completed course
-            const unfinished = assignments.filter(a => !completedCourses.includes(a.courseId));
             return unfinished;
         } catch (error) {
             console.error('[DASHBOARD MODEL ERROR getUnfinishedCourses]', error.message);

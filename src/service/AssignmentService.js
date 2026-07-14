@@ -1,6 +1,7 @@
 import { AssignmentModel } from '../models/AssignmentModel.js';
 import { CourseModel } from '../models/CourseModel.js';
 import { UserModel } from '../models/UserModel.js';
+import { getAssignmentCompletionState } from '../lib/courseCompletion.js';
 
 export class AssignmentService {
     static async createAssignments(data, assigner) {
@@ -47,32 +48,41 @@ export class AssignmentService {
 
         const assignments = await AssignmentModel.findByLearnerId(user.id);
 
-        return assignments.map(assignment => {
-            // Get attempts for THIS specific course
+        const enriched = [];
+        for (const assignment of assignments) {
             const courseAttempts = assignment.assigneeUser?.userAttempts?.filter(
-                attempt => attempt.courseId === assignment.courseId
+                (attempt) => attempt.courseId === assignment.courseId,
             ) || [];
 
-            // Calculate progress
-            let progress = 0;
+            const completionState = await getAssignmentCompletionState(
+                user.id,
+                assignment.courseId,
+            );
+
+            let progress = completionState.progress;
             if (courseAttempts.length > 0) {
-                // Use the most recent attempt
                 const latestAttempt = courseAttempts.reduce((latest, current) => {
                     return (!latest || new Date(current.createdAt) > new Date(latest.createdAt))
                         ? current
                         : latest;
                 }, null);
 
-                progress = latestAttempt?.completionPercentage || 0;
+                progress = Math.max(
+                    progress,
+                    Math.min(100, Math.max(0, latestAttempt?.completionPercentage || 0),
+                ));
             }
 
-            return {
+            enriched.push({
                 ...assignment,
                 progress: Math.min(100, Math.max(0, progress)),
+                status: completionState.status,
                 totalAttempts: courseAttempts.length,
-                attempts: courseAttempts
-            };
-        });
+                attempts: courseAttempts,
+            });
+        }
+
+        return enriched;
     }
 
 }

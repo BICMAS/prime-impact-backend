@@ -4,6 +4,7 @@ import { ScormService } from '../service/ScormService.js';
 import { AttemptService } from '../service/AttemptService.js';
 import { prisma } from '../utils/db.js';
 import { ScormCloudService } from '../services/ScormCloudService.js';
+import { computeScorePercent } from '../utils/scormScore.js';
 
 export const uploadPackage = async (req, res) => {
     console.log('[SCORM CONTROLLER] Upload request received');
@@ -255,6 +256,12 @@ export const getUserScormScore = async (req, res) => {
                     );
 
                     result.cloudScore = cloudData;
+                    result.scorePercent = computeScorePercent(
+                        cloudData.raw ?? attempt.score,
+                        cloudData.scaled ?? attempt.scormCloudScoreScaled,
+                        cloudData.max ?? 100,
+                        cloudData.min ?? 0,
+                    );
                     result.lastSync = new Date(); // mark as freshly synced
                 } catch (err) {
                     console.warn(`[SCORE FETCH FAIL] Reg ${attempt.scormCloudRegistrationId}:`, err.message);
@@ -264,6 +271,10 @@ export const getUserScormScore = async (req, res) => {
                         raw: attempt.score,
                         scaled: attempt.scormCloudScoreScaled
                     };
+                    result.scorePercent = computeScorePercent(
+                        attempt.score,
+                        attempt.scormCloudScoreScaled,
+                    );
                 }
 
                 return result;

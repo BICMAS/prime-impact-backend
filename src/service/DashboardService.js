@@ -1,11 +1,14 @@
 import { DashboardModel } from '../models/DashboardModel.js';
 import { UserModel } from '../models/UserModel.js';
 import { AttemptModel } from '../models/AttemptModel.js';
+import { ScoreService } from './ScoreService.js';
+import { prisma } from '../utils/db.js';
+import { computeScorePercent } from '../utils/scormScore.js';
 
 export class DashboardService {
     static async getHRDashboard(orgId) {
         console.log('[DASHBOARD SERVICE] Fetching for orgId:', orgId);
-        const [totalLearners, averageCompletion, overdueCourses, activeAssignments, topPerformers, completionByDepartment, courseStatus] = await Promise.all([
+        const [totalLearners, averageCompletion, overdueCourses, activeAssignments, topPerformers, completionByDepartment, courseStatus, scoreLeaderboard, pointsLeaderboard] = await Promise.all([
 
             DashboardModel.getTotalLearners(orgId),
             DashboardModel.getAverageCompletion(orgId),
@@ -13,7 +16,9 @@ export class DashboardService {
             DashboardModel.getActiveAssignments(orgId),
             DashboardModel.getTopPerformers(orgId),
             DashboardModel.getCompletionByDepartment(orgId),
-            DashboardModel.getCourseStatus(orgId)
+            DashboardModel.getCourseStatus(orgId),
+            ScoreService.getLeaderboard({ metric: 'score', orgId, limit: 5 }),
+            ScoreService.getLeaderboard({ metric: 'points', orgId, limit: 5 }),
         ]);
 
         return {
@@ -22,6 +27,8 @@ export class DashboardService {
             overdueCourses,
             activeAssignments,
             topPerformers,
+            scoreLeaderboard,
+            pointsLeaderboard,
             completionByDepartment,
             courseStatus
         };
@@ -232,6 +239,19 @@ export class HRCourseTrackingService {
         const tracking = await Promise.all(
             learners.map(async (learner) => {
                 const attempts = await AttemptModel.findByUserId(learner.id);
+                const scormAttempts = await prisma.scormAttempt.findMany({
+                    where: { userId: learner.id },
+                    include: {
+                        scormPackage: { select: { id: true, filename: true } },
+                        attempt: {
+                            select: {
+                                courseId: true,
+                                course: { select: { id: true, title: true } },
+                            },
+                        },
+                    },
+                    orderBy: { updatedAt: 'desc' },
+                });
                 const currentCourse = await DashboardModel.getCurrentCourse(learner.id);
                 const unfinishedCourses = await DashboardModel.getUnfinishedCourses(learner.id);
                 const stats = HRCourseTrackingService.buildLearnerStats(attempts, unfinishedCourses);
@@ -240,6 +260,7 @@ export class HRCourseTrackingService {
                 return {
                     learner,
                     attempts,
+                    scormAttempts,
                     currentCourse,
                     unfinishedCourses,
                     stats,
@@ -268,22 +289,57 @@ export class HRCourseTrackingService {
         const progress = [];
 
         paginated.forEach((item) => {
-            (item.attempts || []).forEach((attempt) => {
-                if (attempt?.course?.id && !courseMap.has(attempt.course.id)) {
-                    courseMap.set(attempt.course.id, attempt.course);
-                }
+            const pushProgressRow = (row) => {
                 progress.push({
                     learnerId: item.learner.id,
                     learnerName: item.learner.fullName,
                     learnerEmail: item.learner.email,
                     learnerDepartment: item.learner.department || 'UNASSIGNED',
+                    ...row,
+                });
+            };
+
+            const scormAttempts = item.scormAttempts || [];
+
+            if (scormAttempts.length > 0) {
+                scormAttempts.forEach((scormAttempt) => {
+                    const scorePercent = computeScorePercent(
+                        scormAttempt.score,
+                        scormAttempt.scormCloudScoreScaled,
+                    );
+                    pushProgressRow({
+                        courseId: scormAttempt.attempt?.courseId || scormAttempt.scormPackageId,
+                        courseTitle:
+                            scormAttempt.attempt?.course?.title
+                            || scormAttempt.scormPackage?.filename?.replace(/\.zip$/i, '')
+                            || 'SCORM Module',
+                        status: scormAttempt.status,
+                        completionPercentage: scormAttempt.completionPercentage || 0,
+                        score: scorePercent,
+                        scoreRaw: scormAttempt.score,
+                        passed: scormAttempt.status === 'PASSED' || scorePercent === 100,
+                        dueDate: null,
+                        syncedAt: scormAttempt.updatedAt || null,
+                    });
+                });
+                return;
+            }
+
+            (item.attempts || []).forEach((attempt) => {
+                if (attempt?.course?.id && !courseMap.has(attempt.course.id)) {
+                    courseMap.set(attempt.course.id, attempt.course);
+                }
+                const scorePercent = computeScorePercent(attempt.score, attempt.scormCloudScoreScaled);
+                pushProgressRow({
                     courseId: attempt.courseId || null,
                     courseTitle: attempt.course?.title || null,
                     status: attempt.status,
                     completionPercentage: attempt.completionPercentage || 0,
-                    score: attempt.score ?? null,
+                    score: scorePercent ?? attempt.score ?? null,
+                    scoreRaw: attempt.score ?? null,
+                    passed: attempt.status === 'PASSED' || scorePercent === 100,
                     dueDate: attempt.dueDate || null,
-                    syncedAt: attempt.updatedAt || null
+                    syncedAt: attempt.updatedAt || null,
                 });
             });
         });
