@@ -27,3 +27,19 @@ export const syncScormProgress = async (req, res) => {
         });
     }
 };
+
+export const retakeCourse = async (req, res) => {
+    try {
+        const { courseId } = req.params;
+        const result = await AttemptService.retakeCourse(courseId, req.user);
+        res.json({
+            success: true,
+            data: result,
+        });
+    } catch (error) {
+        res.status(400).json({
+            success: false,
+            error: error.message,
+        });
+    }
+};

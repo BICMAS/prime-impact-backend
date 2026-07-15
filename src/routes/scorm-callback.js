@@ -5,6 +5,10 @@ import { isProductionEnv } from '../config/env.js';
 import { EconomyService } from '../service/EconomyService.js';
 import { AttemptService } from '../service/AttemptService.js';
 import { normalizeCallbackPayload } from '../utils/scormScore.js';
+import {
+    evaluateScormOutcome,
+    getCoursePassingConfigByScormPackageId,
+} from '../lib/coursePassing.js';
 
 const scormCallbackRouter = express.Router();
 
@@ -76,12 +80,21 @@ scormCallbackRouter.post('/', express.urlencoded({ extended: true }), async (req
             existingScormAttempt.completionPercentage ?? 0,
         );
 
+        const passingConfig = await getCoursePassingConfigByScormPackageId(scormPackage.id);
+        const outcome = evaluateScormOutcome({
+            completionPercentage: normalized.completionPercentage,
+            scorePercent: normalized.scorePercent,
+            scormStatus: normalized.status,
+            passingScore: passingConfig.passingScore,
+            requireQuizPass: passingConfig.requireQuizPass,
+        });
+
         const learnerId = existingScormAttempt.userId;
         const previousScormStatus = existingScormAttempt.status;
         let courseAttemptId = existingScormAttempt.attemptId || null;
 
         const attemptData = {
-            status: normalized.status,
+            status: outcome.status,
             completionPercentage: normalized.completionPercentage,
             score: normalized.scoreRaw,
             learningHours: normalized.learningHours,
@@ -116,7 +129,7 @@ scormCallbackRouter.post('/', express.urlencoded({ extended: true }), async (req
             where: { id: existingScormAttempt.id },
             data: {
                 attemptId: courseAttemptId,
-                status: normalized.status,
+                status: outcome.status,
                 completionPercentage: normalized.completionPercentage,
                 score: normalized.scoreRaw,
                 learningHours: normalized.learningHours,
@@ -127,14 +140,16 @@ scormCallbackRouter.post('/', express.urlencoded({ extended: true }), async (req
             }
         });
 
-        await EconomyService.onModuleCompleted(
-            learnerId,
-            scormPackage.id,
-            previousScormStatus,
-            normalized.status,
-        );
+        if (outcome.passed) {
+            await EconomyService.onModuleCompleted(
+                learnerId,
+                scormPackage.id,
+                previousScormStatus,
+                outcome.status,
+            );
+        }
 
-        if (normalized.scorePercent === 100) {
+        if (outcome.passed && normalized.scorePercent === 100) {
             await EconomyService.onPerfectQuiz(learnerId, scormPackage.id);
         }
 

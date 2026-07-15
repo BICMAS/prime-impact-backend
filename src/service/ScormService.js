@@ -42,7 +42,23 @@ export class ScormService {
             throw new Error('Package ID and User ID are required');
         }
 
-        const launchUrl = await ScormPackageModel.getLaunchUrl(packageId, userId, userFullName, options);
+        const normalizedOptions = {
+            courseId: options.courseId ?? null,
+            assignmentId: options.assignmentId ?? null,
+            lessonId: options.lessonId ?? null,
+            moduleId: options.moduleId ?? null,
+            startSco: options.startSco ?? null,
+            forceNewRegistration:
+                options.forceNewRegistration === true ||
+                options.forceNewRegistration === 'true',
+        };
+
+        const launchUrl = await ScormPackageModel.getLaunchUrl(
+            packageId,
+            userId,
+            userFullName,
+            normalizedOptions,
+        );
         return launchUrl;
     }
 

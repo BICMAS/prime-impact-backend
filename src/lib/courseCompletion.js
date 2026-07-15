@@ -1,4 +1,9 @@
 import { prisma } from '../utils/db.js';
+import {
+    evaluateScormOutcome,
+    getCoursePassingConfigByCourseId,
+    scoreFromAttemptFields,
+} from './coursePassing.js';
 
 export async function getCourseScormPackageIds(courseId) {
     const course = await prisma.course.findUnique({
@@ -28,13 +33,26 @@ export async function getCourseScormPackageIds(courseId) {
     return [...packageIds];
 }
 
-function isScormAttemptComplete(scormAttempt) {
-    return scormAttempt.status === 'COMPLETED'
-        || scormAttempt.status === 'PASSED'
-        || (scormAttempt.completionPercentage ?? 0) >= 100;
+function evaluateScormAttemptPassed(scormAttempt, passingConfig) {
+    const scorePercent = scoreFromAttemptFields(
+        scormAttempt.score,
+        scormAttempt.scormCloudScoreScaled,
+    );
+
+    const outcome = evaluateScormOutcome({
+        completionPercentage: scormAttempt.completionPercentage ?? 0,
+        scorePercent,
+        scormStatus: scormAttempt.status,
+        passingScore: passingConfig.passingScore,
+        requireQuizPass: passingConfig.requireQuizPass,
+    });
+
+    return outcome.passed;
 }
 
 export async function getAssignmentCompletionState(userId, courseId) {
+    const passingConfig = await getCoursePassingConfigByCourseId(courseId);
+
     const courseAttempt = await prisma.attempt.findUnique({
         where: {
             userId_courseId: { userId, courseId },
@@ -42,15 +60,55 @@ export async function getAssignmentCompletionState(userId, courseId) {
         select: {
             status: true,
             completionPercentage: true,
+            score: true,
+            scormCloudScoreScaled: true,
         },
     });
 
-    if (courseAttempt?.status === 'COMPLETED' || (courseAttempt?.completionPercentage ?? 0) >= 100) {
+    if (courseAttempt?.status === 'FAILED') {
         return {
-            complete: true,
-            progress: 100,
-            status: 'COMPLETED',
+            complete: false,
+            passed: false,
+            progress: Math.round(courseAttempt.completionPercentage ?? 0),
+            status: 'FAILED',
+            requiresRetake: true,
+            passingScore: passingConfig.passingScore,
+            scorePercent: scoreFromAttemptFields(
+                courseAttempt.score,
+                courseAttempt.scormCloudScoreScaled,
+            ),
         };
+    }
+
+    if (courseAttempt?.status === 'COMPLETED' || courseAttempt?.status === 'PASSED') {
+        const scorePercent = scoreFromAttemptFields(
+            courseAttempt.score,
+            courseAttempt.scormCloudScoreScaled,
+        );
+
+        if (!passingConfig.requireQuizPass) {
+            return {
+                complete: true,
+                passed: true,
+                progress: 100,
+                status: 'COMPLETED',
+                requiresRetake: false,
+                passingScore: passingConfig.passingScore,
+                scorePercent,
+            };
+        }
+
+        if (scorePercent != null && scorePercent >= passingConfig.passingScore) {
+            return {
+                complete: true,
+                passed: true,
+                progress: 100,
+                status: 'COMPLETED',
+                requiresRetake: false,
+                passingScore: passingConfig.passingScore,
+                scorePercent,
+            };
+        }
     }
 
     const packageIds = await getCourseScormPackageIds(courseId);
@@ -58,8 +116,15 @@ export async function getAssignmentCompletionState(userId, courseId) {
         const progress = Math.round(courseAttempt?.completionPercentage ?? 0);
         return {
             complete: false,
+            passed: false,
             progress,
             status: courseAttempt?.status ?? 'NOT_STARTED',
+            requiresRetake: false,
+            passingScore: passingConfig.passingScore,
+            scorePercent: scoreFromAttemptFields(
+                courseAttempt?.score,
+                courseAttempt?.scormCloudScoreScaled,
+            ),
         };
     }
 
@@ -71,6 +136,8 @@ export async function getAssignmentCompletionState(userId, courseId) {
         select: {
             completionPercentage: true,
             status: true,
+            score: true,
+            scormCloudScoreScaled: true,
         },
     });
 
@@ -78,8 +145,12 @@ export async function getAssignmentCompletionState(userId, courseId) {
         const progress = Math.round(courseAttempt?.completionPercentage ?? 0);
         return {
             complete: false,
+            passed: false,
             progress,
             status: courseAttempt?.status ?? 'NOT_STARTED',
+            requiresRetake: false,
+            passingScore: passingConfig.passingScore,
+            scorePercent: null,
         };
     }
 
@@ -87,11 +158,59 @@ export async function getAssignmentCompletionState(userId, courseId) {
         scormAttempts.reduce((sum, attempt) => sum + (attempt.completionPercentage ?? 0), 0)
             / scormAttempts.length,
     );
-    const complete = scormAttempts.every(isScormAttemptComplete);
+
+    const anyFailed = scormAttempts.some((attempt) => {
+        const scorePercent = scoreFromAttemptFields(attempt.score, attempt.scormCloudScoreScaled);
+        const outcome = evaluateScormOutcome({
+            completionPercentage: attempt.completionPercentage ?? 0,
+            scorePercent,
+            scormStatus: attempt.status,
+            passingScore: passingConfig.passingScore,
+            requireQuizPass: passingConfig.requireQuizPass,
+        });
+        return outcome.status === 'FAILED';
+    });
+
+    if (anyFailed) {
+        const failedScores = scormAttempts
+            .map((attempt) => scoreFromAttemptFields(attempt.score, attempt.scormCloudScoreScaled))
+            .filter((value) => value != null);
+        const scorePercent = scoreFromAttemptFields(
+            courseAttempt?.score,
+            courseAttempt?.scormCloudScoreScaled,
+        ) ?? (failedScores.length > 0
+            ? Math.round(failedScores.reduce((sum, value) => sum + value, 0) / failedScores.length)
+            : null);
+
+        return {
+            complete: false,
+            passed: false,
+            progress,
+            status: 'FAILED',
+            requiresRetake: true,
+            passingScore: passingConfig.passingScore,
+            scorePercent: scorePercent || null,
+        };
+    }
+
+    const complete = scormAttempts.every((attempt) =>
+        evaluateScormAttemptPassed(attempt, passingConfig),
+    );
+
+    const rolledScores = scormAttempts
+        .map((attempt) => scoreFromAttemptFields(attempt.score, attempt.scormCloudScoreScaled))
+        .filter((value) => value != null);
+    const rolledScore = rolledScores.length > 0
+        ? Math.round(rolledScores.reduce((sum, value) => sum + value, 0) / rolledScores.length)
+        : null;
 
     return {
         complete,
+        passed: complete,
         progress: complete ? 100 : progress,
         status: complete ? 'COMPLETED' : progress > 0 ? 'IN_PROGRESS' : 'NOT_STARTED',
+        requiresRetake: false,
+        passingScore: passingConfig.passingScore,
+        scorePercent: rolledScore || null,
     };
 }

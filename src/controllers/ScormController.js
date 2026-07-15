@@ -88,7 +88,12 @@ export const getLaunch = async (req, res) => {
         });
     } catch (error) {
         console.error('[SCORM CONTROLLER LAUNCH ERROR]', error.message);
-        res.status(400).json({ success: false, error: error.message });
+        const statusCode = error.code === 'MODULE_LOCKED' ? 403 : 400;
+        res.status(statusCode).json({
+            success: false,
+            error: error.message,
+            unlockAt: error.unlockAt ?? null,
+        });
     }
 };
 

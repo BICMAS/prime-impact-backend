@@ -1,6 +1,7 @@
 import { CourseModel } from '../models/CourseModel.js';
 import { ModuleModel } from '../models/ModuleModel.js';
 import { StorageService } from '../services/StorageService.js';
+import { linkModulesToManifestActivities } from '../lib/modulePacing.js';
 
 async function withResolvedImageUrl(course) {
     if (!course?.imageUrl) return course;
@@ -65,6 +66,52 @@ export class CourseService {
             status: data.status || 'PUBLISHED'
         };
 
+        if (data.passingScore !== undefined) {
+            const parsed = Number(data.passingScore);
+            if (!Number.isFinite(parsed) || parsed < 0 || parsed > 100) {
+                throw new Error('Passing score must be between 0 and 100');
+            }
+            updateData.passingScore = parsed;
+        }
+
+        if (data.requireQuizPass !== undefined) {
+            updateData.requireQuizPass = Boolean(data.requireQuizPass);
+        }
+
+        if (data.modulePacingEnabled !== undefined) {
+            updateData.modulePacingEnabled = Boolean(data.modulePacingEnabled);
+        }
+
+        if (data.modulePacingDays !== undefined) {
+            const parsedDays = Number(data.modulePacingDays);
+            if (!Number.isFinite(parsedDays) || parsedDays < 1 || parsedDays > 365) {
+                throw new Error('Module pacing days must be between 1 and 365');
+            }
+            updateData.modulePacingDays = Math.round(parsedDays);
+        }
+
+        if (data.pacingStartDate !== undefined) {
+            if (data.pacingStartDate === null || data.pacingStartDate === '') {
+                updateData.pacingStartDate = null;
+            } else {
+                const parsedDate = new Date(data.pacingStartDate);
+                if (Number.isNaN(parsedDate.getTime())) {
+                    throw new Error('Invalid pacing start date');
+                }
+                updateData.pacingStartDate = parsedDate;
+            }
+        }
+
+        if (data.modulePacingEnabled === true) {
+            const effectiveStartDate =
+                updateData.pacingStartDate !== undefined
+                    ? updateData.pacingStartDate
+                    : course.pacingStartDate;
+            if (!effectiveStartDate) {
+                throw new Error('Pacing start date is required when module pacing is enabled');
+            }
+        }
+
 
         if (data.modules !== undefined) {
             updateData.modules = data.modules;
@@ -72,7 +119,10 @@ export class CourseService {
 
         console.log('[COURSE SERVICE] Updating with status:', updateData.status);
 
-        return await CourseModel.updateNested(id, updateData);
+        const updated = await CourseModel.updateNested(id, updateData);
+
+        await linkModulesToManifestActivities(updated.id);
+        return CourseModel.findById(updated.id);
     }
 
     static async publishCourse(id, data, requester) {

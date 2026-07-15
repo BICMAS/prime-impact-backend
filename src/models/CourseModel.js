@@ -62,6 +62,11 @@ export class CourseModel {
             version: data.version || null,
             scormPackageId: data.scormPackageId || null,
             status: data.status || 'PUBLISHED',
+            passingScore: data.passingScore ?? undefined,
+            requireQuizPass: data.requireQuizPass ?? undefined,
+            modulePacingEnabled: data.modulePacingEnabled ?? undefined,
+            modulePacingDays: data.modulePacingDays ?? undefined,
+            pacingStartDate: data.pacingStartDate ?? undefined,
             updatedAt: new Date()
         };
 
@@ -75,8 +80,10 @@ export class CourseModel {
             } else {
 
                 updateData.modules = {
-                    create: data.modules.map(module => ({
+                    create: data.modules.map((module, index) => ({
                         name: module.name,
+                        sortOrder: module.sortOrder ?? index,
+                        scormActivityId: module.scormActivityId ?? null,
                         lessons: {
                             create: (module.lessons || []).map(lesson => ({
                                 title: lesson.title,

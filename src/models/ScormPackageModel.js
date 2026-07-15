@@ -16,6 +16,11 @@ import { prisma } from '../utils/db.js';
 import { ScormCloudService } from '../services/ScormCloudService.js';
 import fs from 'fs';
 import path from 'path';
+import { parseManifestActivitiesFromZip } from '../lib/scormManifestParser.js';
+import {
+    assertModuleUnlocked,
+    resolveStartScoForModule,
+} from '../lib/modulePacing.js';
 
 export class ScormPackageModel {
     static getErrorMessage(error, fallback = 'SCORM launch failed') {
@@ -35,6 +40,15 @@ export class ScormPackageModel {
         //    (potentially ~30 min) import. The generated courseId is also the
         //    scormCloudId, so we already have everything we need to launch later.
         const packageSize = fs.existsSync(filePath) ? fs.statSync(filePath).size : 0;
+
+        let manifestData = { activities: [] };
+        try {
+            manifestData = await parseManifestActivitiesFromZip(filePath);
+            console.log(`[MODEL] Parsed ${manifestData.activities.length} SCORM activities from manifest`);
+        } catch (parseErr) {
+            console.warn('[MODEL] Manifest parse skipped:', parseErr.message);
+        }
+
         const { jobId, courseId } = await ScormCloudService.submitCourseUpload(filePath, filename, lessonId);
 
         // 2. Persist the package immediately and respond fast so Railway's proxy
@@ -43,7 +57,11 @@ export class ScormPackageModel {
             data: {
                 filename,
                 storagePath: `scormcloud://${courseId}`,
-                manifestJson: {},
+                manifestJson: {
+                    activities: manifestData.activities ?? [],
+                    organizationId: manifestData.organizationId ?? null,
+                    schemaVersion: manifestData.schemaVersion ?? null,
+                },
                 scormVersion: 'V2004', // sensible default; corrected once import finishes
                 encrypted: false,
                 checksum: `cloud-${Date.now()}`,
@@ -112,13 +130,23 @@ export class ScormPackageModel {
     }
 
     static async getLaunchUrl(packageId, userId, userFullName, options = {}) {
-        console.log('[LAUNCH] Getting URL for package:', packageId, 'user:', userId);
+        console.log('[LAUNCH] Getting URL for package:', packageId, 'user:', userId, 'options:', options);
 
         const pkg = await this.findById(packageId);
         if (!pkg) throw new Error('Package not found');
 
         const scormCloudId = pkg.scormCloudId;
         if (!scormCloudId) throw new Error('No SCORM Cloud ID');
+
+        let startSco = options.startSco ?? null;
+        if (options.moduleId && options.courseId) {
+            await assertModuleUnlocked(userId, options.courseId, options.moduleId);
+            if (!startSco) {
+                startSco = await resolveStartScoForModule(options.moduleId);
+            }
+        }
+
+        const launchOptions = startSco ? { startSco } : {};
 
         const getOrCreateCourseAttempt = async () => {
             if (!options.courseId) return null;
@@ -164,7 +192,8 @@ export class ScormPackageModel {
             const result = await ScormCloudService.createLaunchLink(
                 scormCloudId,
                 userId,
-                userFullName || 'Learner'
+                userFullName || 'Learner',
+                launchOptions,
             );
 
             registrationId = result.registrationId;
@@ -173,14 +202,62 @@ export class ScormPackageModel {
         };
 
         try {
-            if (registrationId) {
+            if (options.forceNewRegistration) {
+                console.log('[LAUNCH RETAKE] Creating fresh registration for package:', packageId);
+                await createFreshRegistrationAndLaunch();
+
+                const courseAttempt = await getOrCreateCourseAttempt();
+                if (courseAttempt?.id) {
+                    await prisma.attempt.update({
+                        where: { id: courseAttempt.id },
+                        data: {
+                            status: 'IN_PROGRESS',
+                            completionPercentage: 0,
+                            score: null,
+                            updatedAt: new Date(),
+                        },
+                    });
+                }
+
+                if (scormAttempt) {
+                    await prisma.scormAttempt.update({
+                        where: { id: scormAttempt.id },
+                        data: {
+                            scormCloudRegistrationId: registrationId,
+                            attemptId: courseAttempt?.id || scormAttempt.attemptId,
+                            status: 'IN_PROGRESS',
+                            completionPercentage: 0,
+                            score: null,
+                            scormCloudCompletion: null,
+                            scormCloudScoreScaled: null,
+                            learningHours: null,
+                            updatedAt: new Date(),
+                        },
+                    });
+                } else {
+                    scormAttempt = await prisma.scormAttempt.create({
+                        data: {
+                            userId,
+                            scormPackageId: packageId,
+                            attemptId: courseAttempt?.id || null,
+                            scormCloudRegistrationId: registrationId,
+                            status: 'IN_PROGRESS',
+                            createdAt: new Date(),
+                            updatedAt: new Date(),
+                        },
+                    });
+                }
+            } else if (registrationId) {
                 console.log(`[LAUNCH REUSE] Using existing registrationId: ${registrationId}`);
 
                 const client = ScormCloudService.init();
 
                 const launchPayload = {
-                    redirectOnExitUrl: 'https://your-domain.com/lesson-complete' // CHANGE THIS
+                    redirectOnExitUrl: 'https://bicmas-trainee.vercel.app/scorm-exit.html',
                 };
+                if (startSco) {
+                    launchPayload.startSco = startSco;
+                }
 
                 try {
                     const launchRes = await client.post(

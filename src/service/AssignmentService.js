@@ -77,6 +77,9 @@ export class AssignmentService {
                 ...assignment,
                 progress: Math.min(100, Math.max(0, progress)),
                 status: completionState.status,
+                passingScore: completionState.passingScore,
+                scorePercent: completionState.scorePercent,
+                requiresRetake: completionState.requiresRetake,
                 totalAttempts: courseAttempts.length,
                 attempts: courseAttempts,
             });

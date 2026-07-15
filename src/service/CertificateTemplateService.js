@@ -4,6 +4,7 @@ import { CourseModel } from '../models/CourseModel.js';
 import { UserModel } from '../models/UserModel.js';
 import { AssignmentModel } from '../models/AssignmentModel.js';
 import { AttemptModel } from '../models/AttemptModel.js';
+import { getAssignmentCompletionState } from '../lib/courseCompletion.js';
 import { CertificatePdfService, serializeTemplateMetadata } from './CertificatePdfService.js';
 import { StorageService } from '../services/StorageService.js';
 
@@ -395,8 +396,11 @@ export class CertificateTemplateService {
         }
 
         const attempt = await AttemptModel.findByUserAndCourse(learnerId, courseId);
-        const isCompleted = !!attempt && (attempt.status === 'COMPLETED' || Number(attempt.completionPercentage || 0) >= 100);
-        if (!isCompleted) {
+        const completionState = await getAssignmentCompletionState(learnerId, courseId);
+        if (!completionState.complete || !completionState.passed) {
+            if (completionState.requiresRetake) {
+                throw new Error(`Quiz not passed. Minimum score is ${completionState.passingScore}%. Please retake the course.`);
+            }
             throw new Error('Course not yet completed');
         }
 

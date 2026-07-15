@@ -74,6 +74,14 @@ enum AttemptStatus {
   IN_PROGRESS
 }
 
+enum LearnerModuleProgressStatus {
+  LOCKED
+  UNLOCKED
+  IN_PROGRESS
+  COMPLETED
+  FAILED
+}
+
 model User {
   id                          String                  @id @default(cuid()) @db.VarChar(25)
   username                    String?                 @unique
@@ -113,6 +121,7 @@ model User {
   fieldTasks                  FieldTask[]
   announcements               Announcement[]
   coinAwards                  CoinAward[]
+  learnerModuleProgress       LearnerModuleProgress[]
 
   @@map("users")
 }
@@ -219,22 +228,55 @@ model Course {
   certificates       Certificate[]
   quizzes            Quiz[]
   imageUrl           String?
+  passingScore         Float?        @default(70)
+  requireQuizPass      Boolean       @default(true)
+  modulePacingEnabled  Boolean       @default(false)
+  modulePacingDays     Int           @default(7)
+  pacingStartDate      DateTime?
+
+  learnerModuleProgress LearnerModuleProgress[]
 
   @@map("courses")
 }
 
 model Module {
-  id        String   @id @default(cuid()) @db.VarChar(25)
-  name      String // Required
-  courseId  String   @db.VarChar(25)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id              String   @id @default(cuid()) @db.VarChar(25)
+  name            String // Required
+  courseId        String   @db.VarChar(25)
+  sortOrder       Int      @default(0)
+  scormActivityId String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
-  course  Course   @relation("CourseModules", fields: [courseId], references: [id], onDelete: Cascade) // FIXED: Matching name
-  lessons Lesson[] @relation("ModuleLessons") // Named for nested lessons
+  course          Course                  @relation("CourseModules", fields: [courseId], references: [id], onDelete: Cascade) // FIXED: Matching name
+  lessons         Lesson[]                @relation("ModuleLessons") // Named for nested lessons
+  learnerProgress LearnerModuleProgress[]
 
   @@index([courseId]) // Perf
   @@map("modules")
+}
+
+model LearnerModuleProgress {
+  id                   String                      @id @default(cuid()) @db.VarChar(25)
+  userId               String                      @db.VarChar(25)
+  courseId             String                      @db.VarChar(25)
+  moduleId             String                      @db.VarChar(25)
+  scormActivityId      String?
+  status               LearnerModuleProgressStatus @default(LOCKED)
+  unlockedAt           DateTime?
+  completedAt          DateTime?
+  scorePercent         Float?
+  completionPercentage Float?                      @default(0)
+  createdAt            DateTime                    @default(now())
+  updatedAt            DateTime                    @updatedAt
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  course Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  module Module @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, moduleId])
+  @@index([userId, courseId])
+  @@map("learner_module_progress")
 }
 
 model Lesson {
